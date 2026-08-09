@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 
 HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$")  # 匹配 Markdown 标题的正则表达式
+MAX_CHUNK_CHARS = 1200
+OVERLAP_CHARS = 150
 
 def read_markdown(path:Path) ->str:
     """读取 UTF-8 编码的 Markdown 文件。"""
@@ -33,12 +35,12 @@ def parse_markdown_file(path:Path,root_dir:Path) ->dict[str,str]:
         "text":markdown_text,
     }
 
-def save_documents(documents:list[dict[str,str]],output_path:Path) ->None:
+def save_json(data:list[dict[str,str]],output_path:Path) ->None:
     """把结构化文档保存为格式化 JSON。"""
     output_path.parent.mkdir(parents=True,exist_ok=True)
 
     output_path.write_text(
-        json.dumps(documents,ensure_ascii=False,indent=2),
+        json.dumps(data,ensure_ascii=False,indent=2),
         encoding="utf-8"
     )
 
@@ -64,7 +66,7 @@ def append_section(
     text = "\n".join(lines).strip()
 
     if text:
-        section.append(
+        sections.append(
             {
                 "heading_path":" > ".join(heading_path),
                 "text":text,
@@ -95,7 +97,99 @@ def split_by_headings(
             append_section(sections,current_heading_path,current_lines)
 
             level =len(heading_match.group(1))
-            heading = heading_match.grouo(2).strip()
+            heading = heading_match.group(2).strip()
+
+            if level == 1:
+                # 一级标题就是新的根，不再保留 fallback_title。
+                current_heading_path = [heading]
+
+            else:
+                # 二级标题保留一级标题，三级标题保留一级和二级标题，以此类推。
+                parent_path = current_heading_path[: level - 1]
+
+                if not parent_path:
+                    parent_path = [fallback_title or "未命名文档"]
+
+                current_heading_path = parent_path + [heading]
+
+            current_lines = []
+            continue
+
+        current_lines.append(line)
+
+    append_section(sections,current_heading_path,current_lines)
+
+    return sections
+
+def split_long_text(
+        text:str,
+        max_chars:int,
+        overlap_chars:int,
+) ->list[str]:
+    """把过长文本切成限制长度的片段，并保留相邻片段重叠。"""
+    if max_chars <= 0:
+        raise ValueError("max_chars 必须大于 0")
+
+    if overlap_chars < 0 or overlap_chars >= max_chars:
+        raise ValueError("overlap_chars 必须大于等于 0 且小于 max_chars")
+
+    if len(text) <= max_chars:
+        return [text]
+
+    pieces:list[str] = []
+    start = 0
+
+    while start <len(text):
+        end = min(start + max_chars, len(text))
+
+        if end < len(text):
+            last_newline = text.rfind("\n", start, end)
+
+            if last_newline > start + max_chars//2:
+                end = last_newline
+
+        piece = text[start:end].strip()
+
+        if piece:
+            pieces.append(piece)
+
+        if end == len(text):
+            break
+
+        start = end - overlap_chars
+
+    return pieces
+
+def create_chunks(documents: list[dict[str, str]]) -> list[dict[str, str]]:
+    """把所有原始文档切分成带来源信息、限制长度的章节片段。"""
+    chunks: list[dict[str, str]] = []
+
+    for document in documents:
+        clean_text = strip_frontmatter(document["text"])
+        sections = split_by_headings(clean_text, document["title"])
+
+        for section_index, section in enumerate(sections):
+            text_pieces = split_long_text(
+                section["text"],
+                max_chars=MAX_CHUNK_CHARS,
+                overlap_chars=OVERLAP_CHARS,
+            )
+
+            for piece_index, text_piece in enumerate(text_pieces):
+                chunks.append(
+                    {
+                        "id": (
+                            f"{document['source_file']}"
+                            f"#section-{section_index}-part-{piece_index}"
+                        ),
+                        "source_file": document["source_file"],
+                        "document_title": document["title"],
+                        "heading_path": section["heading_path"],
+                        "text": text_piece,
+                    }
+                )
+
+    return chunks
 
 def main():
     vault_dir = Path(
@@ -103,26 +197,34 @@ def main():
     )
 
     project_dir = Path(__file__).resolve().parent.parent
-    output_path = project_dir / "data" / "generated" / "documents.json"
+    generated_dir = project_dir / "data" / "generated"
+    documents_path = generated_dir / "documents.json"
+    chunks_path = generated_dir / "chunks.json"
 
     markdown_files = find_markdown_files(vault_dir)
     documents = [
         parse_markdown_file(markdown_file, vault_dir)
         for markdown_file in markdown_files
     ]
+    chunks = create_chunks(documents)
 
-    save_documents(documents, output_path)
+    save_json(documents, documents_path)
+    save_json(chunks, chunks_path)
 
     print(f"扫描目录：{vault_dir}")
-    print(f"结构化文档数：{len(documents)}")
-    print(f"JSON 输出：{output_path}")
+    print(f"原始文档数：{len(documents)}")
+    print(f"章节片段数：{len(chunks)}")
+    print(f"文档输出：{documents_path}")
+    print(f"片段输出：{chunks_path}")
 
-    if documents:
-        first_document = documents[0]
+    if chunks:
+        first_chunk = chunks[0]
+        preview = first_chunk["text"][:120].replace("\n", " ")
+
         print("-" * 60)
-        print(f"示例来源：{first_document['source_file']}")
-        print(f"示例标题：{first_document['title']}")
-        print(f"示例字符数：{len(first_document['text'])}")
+        print(f"示例来源：{first_chunk['source_file']}")
+        print(f"示例标题路径：{first_chunk['heading_path']}")
+        print(f"示例片段：{preview}...")
 
 
 if __name__ == "__main__":
