@@ -1,0 +1,144 @@
+[
+  {
+    "id": "holdout-001",
+    "category": "infra",
+    "question": "vLLM、SGLang、TensorRT-LLM 分别面向哪些推理场景？",
+    "expected_source_files": [
+      "02_基础设施与框架/基础设施与框架.md"
+    ],
+    "expected_keywords": [
+      "vLLM",
+      "SGLang",
+      "TensorRT-LLM"
+    ]
+  },
+  {
+    "id": "holdout-002",
+    "category": "data",
+    "question": "大模型数据治理为什么要关注污染、版权、隐私和可追溯性？",
+    "expected_source_files": [
+      "03_数据工程/数据工程.md"
+    ],
+    "expected_keywords": [
+      "污染",
+      "版权",
+      "隐私",
+      "可追溯"
+    ]
+  },
+  {
+    "id": "holdout-003",
+    "category": "architecture",
+    "question": "Dense Transformer 和 MoE 在参数激活方式与工程复杂度上有什么区别？",
+    "expected_source_files": [
+      "04_模型架构/模型架构.md"
+    ],
+    "expected_keywords": [
+      "Dense Transformer",
+      "MoE",
+      "稀疏激活",
+      "Router"
+    ]
+  },
+  {
+    "id": "holdout-004",
+    "category": "training",
+    "question": "RLHF、DPO 和 RLVR 的奖励或优化信号分别来自哪里？",
+    "expected_source_files": [
+      "05_训练与后训练/训练与后训练.md"
+    ],
+    "expected_keywords": [
+      "RLHF",
+      "DPO",
+      "RLVR",
+      "人类偏好",
+      "可验证"
+    ]
+  },
+  {
+    "id": "holdout-005",
+    "category": "inference",
+    "question": "为什么 Prefill 和 Decode 需要使用不同的系统优化策略？",
+    "expected_source_files": [
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "Prefill",
+      "Decode",
+      "计算密集",
+      "访存密集"
+    ]
+  },
+  {
+    "id": "holdout-006",
+    "category": "application",
+    "question": "RAG、Agent 和多模态能力分别为大模型补足了什么？",
+    "expected_source_files": [
+      "07_应用系统/应用系统.md"
+    ],
+    "expected_keywords": [
+      "RAG",
+      "Agent",
+      "多模态",
+      "知识",
+      "行动",
+      "感知"
+    ]
+  },
+  {
+    "id": "holdout-007",
+    "category": "reasoning",
+    "question": "为什么代码和数学任务特别适合使用可验证奖励训练推理能力？",
+    "expected_source_files": [
+      "横切专题_Reasoning与Test-time Compute.md"
+    ],
+    "expected_keywords": [
+      "代码",
+      "数学",
+      "RLVR",
+      "验证器"
+    ]
+  },
+  {
+    "id": "holdout-008",
+    "category": "safety",
+    "question": "RAG 文档、插件和 MCP Server 为什么会构成 Agent 的供应链风险？",
+    "expected_source_files": [
+      "横切专题_评测安全与治理.md"
+    ],
+    "expected_keywords": [
+      "RAG",
+      "插件",
+      "MCP Server",
+      "供应链风险"
+    ]
+  },
+  {
+    "id": "holdout-009",
+    "category": "out_of_domain",
+    "question": "今天上海的空气质量指数是多少？",
+    "expected_source_files": [],
+    "expected_keywords": []
+  },
+  {
+    "id": "holdout-010",
+    "category": "out_of_domain",
+    "question": "现在比特币的实时价格是多少？",
+    "expected_source_files": [],
+    "expected_keywords": []
+  },
+  {
+    "id": "holdout-011",
+    "category": "out_of_domain",
+    "question": "请帮我预订明天从北京飞往上海的机票。",
+    "expected_source_files": [],
+    "expected_keywords": []
+  },
+  {
+    "id": "holdout-012",
+    "category": "out_of_domain",
+    "question": "请根据我的简历推荐一份适合我的工作。",
+    "expected_source_files": [],
+    "expected_keywords": []
+  }
+]

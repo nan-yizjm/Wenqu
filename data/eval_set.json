@@ -1,0 +1,405 @@
+[
+  {
+    "id": "retrieval-001",
+    "category": "comparison",
+    "question": "GRPO 和 RLVR 有什么关系？",
+    "expected_source_files": [
+      "05_训练与后训练/训练与后训练.md"
+    ],
+    "expected_keywords": [
+      "GRPO",
+      "RLVR",
+      "可验证奖励"
+    ]
+  },
+  {
+    "id": "retrieval-002",
+    "category": "definition",
+    "question": "什么是 PagedAttention？它解决什么问题？",
+    "expected_source_files": [
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "PagedAttention",
+      "KV Cache",
+      "分页",
+      "显存碎片"
+    ]
+  },
+  {
+    "id": "retrieval-003",
+    "category": "mechanism",
+    "question": "为什么 GQA 能降低 KV Cache 的显存占用？",
+    "expected_source_files": [
+      "04_模型架构/模型架构.md",
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "GQA",
+      "Query Head",
+      "KV Head",
+      "KV Cache"
+    ]
+  },
+  {
+    "id": "retrieval-004",
+    "category": "mechanism",
+    "question": "FlashAttention 为什么能减少显存访问开销？",
+    "expected_source_files": [
+      "01_硬件与算力/硬件与算力.md",
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "FlashAttention",
+      "HBM",
+      "片上",
+      "分块"
+    ]
+  },
+  {
+    "id": "retrieval-005",
+    "category": "safety",
+    "question": "Prompt Injection 有哪些风险？",
+    "expected_source_files": [
+      "横切专题_评测安全与治理.md"
+    ],
+    "expected_keywords": [
+      "Prompt Injection",
+      "泄露",
+      "错误操作",
+      "恶意"
+    ]
+  },
+  {
+    "id": "retrieval-006",
+    "category": "definition",
+    "question": "Long CoT 和 Test-time Scaling 分别是什么？",
+    "expected_source_files": [
+      "横切专题_Reasoning与Test-time Compute.md"
+    ],
+    "expected_keywords": [
+      "Long CoT",
+      "Test-time Scaling",
+      "推理预算",
+      "推理 token"
+    ]
+  },
+  {
+    "id": "retrieval-007",
+    "category": "application",
+    "question": "Skills、Memory 和 Context Engineering 在 Agent 中分别起什么作用？",
+    "expected_source_files": [
+      "07_应用系统/应用系统.md"
+    ],
+    "expected_keywords": [
+      "Skills",
+      "Memory",
+      "Context Engineering",
+      "私有流程",
+      "上下文"
+    ]
+  },
+  {
+    "id": "retrieval-008",
+    "category": "data",
+    "question": "为什么 Benchmark 泄漏会让评测分数失去可信度？",
+    "expected_source_files": [
+      "03_数据工程/数据工程.md",
+      "横切专题_评测安全与治理.md"
+    ],
+    "expected_keywords": [
+      "Benchmark",
+      "泄漏",
+      "训练集",
+      "评测"
+    ]
+  },
+  {
+    "id": "retrieval-009",
+    "category": "system",
+    "question": "Prefill 和 Decode 的性能瓶颈有什么不同？",
+    "expected_source_files": [
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "Prefill",
+      "Decode",
+      "计算密集",
+      "访存密集"
+    ]
+  },
+  {
+    "id": "retrieval-010",
+    "category": "out_of_domain",
+    "question": "北京明天天气怎么样？",
+    "expected_source_files": [],
+    "expected_keywords": []
+  },
+  {
+    "id": "retrieval-011",
+    "category": "hardware",
+    "question": "显存容量、HBM 带宽和高速互联分别会约束大模型系统的什么能力？",
+    "expected_source_files": [
+      "01_硬件与算力/硬件与算力.md"
+    ],
+    "expected_keywords": [
+      "显存",
+      "HBM",
+      "互联",
+      "KV Cache"
+    ]
+  },
+  {
+    "id": "retrieval-012",
+    "category": "infra",
+    "question": "预训练 Infra 和 Agent RL Infra 的核心需求有什么不同？",
+    "expected_source_files": [
+      "02_基础设施与框架/基础设施与框架.md"
+    ],
+    "expected_keywords": [
+      "预训练 Infra",
+      "Agent RL Infra",
+      "稳定性",
+      "环境交互"
+    ]
+  },
+  {
+    "id": "retrieval-013",
+    "category": "data",
+    "question": "合成数据进入大模型训练集前通常要经历哪些步骤？",
+    "expected_source_files": [
+      "03_数据工程/数据工程.md"
+    ],
+    "expected_keywords": [
+      "种子任务",
+      "过滤",
+      "验证器",
+      "人工抽检"
+    ]
+  },
+  {
+    "id": "retrieval-014",
+    "category": "data",
+    "question": "为什么代码数据同时对预训练、推理能力和 Agent 有价值？",
+    "expected_source_files": [
+      "03_数据工程/数据工程.md"
+    ],
+    "expected_keywords": [
+      "代码",
+      "验证器",
+      "单元测试",
+      "工具"
+    ]
+  },
+  {
+    "id": "retrieval-015",
+    "category": "architecture",
+    "question": "MoE 为什么能提高参数效率，同时又会带来哪些工程代价？",
+    "expected_source_files": [
+      "04_模型架构/模型架构.md"
+    ],
+    "expected_keywords": [
+      "MoE",
+      "稀疏激活",
+      "负载均衡",
+      "通信"
+    ]
+  },
+  {
+    "id": "retrieval-016",
+    "category": "training",
+    "question": "DPO 相比 RLHF 和 PPO 简化了什么训练过程？",
+    "expected_source_files": [
+      "05_训练与后训练/训练与后训练.md"
+    ],
+    "expected_keywords": [
+      "DPO",
+      "RLHF",
+      "PPO",
+      "奖励模型"
+    ]
+  },
+  {
+    "id": "retrieval-017",
+    "category": "inference",
+    "question": "投机解码为什么能加速 Decode 阶段？在哪些场景收益会下降？",
+    "expected_source_files": [
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "投机解码",
+      "Draft Model",
+      "验证",
+      "高随机性"
+    ]
+  },
+  {
+    "id": "retrieval-018",
+    "category": "application",
+    "question": "一个基础 RAG 系统从用户问题到最终回答通常经历哪些步骤？",
+    "expected_source_files": [
+      "07_应用系统/应用系统.md"
+    ],
+    "expected_keywords": [
+      "查询改写",
+      "检索",
+      "重排序",
+      "上下文压缩",
+      "生成"
+    ]
+  },
+  {
+    "id": "retrieval-019",
+    "category": "application",
+    "question": "模型路由和级联服务如何在质量、成本和延迟之间做权衡？",
+    "expected_source_files": [
+      "07_应用系统/应用系统.md"
+    ],
+    "expected_keywords": [
+      "Model Router",
+      "Cascade Serving",
+      "小模型",
+      "大模型"
+    ]
+  },
+  {
+    "id": "retrieval-020",
+    "category": "governance",
+    "question": "LLMOps 为什么既属于基础设施，也属于评测安全治理闭环？",
+    "expected_source_files": [
+      "02_基础设施与框架/基础设施与框架.md",
+      "横切专题_评测安全与治理.md"
+    ],
+    "expected_keywords": [
+      "LLMOps",
+      "监控",
+      "审计",
+      "版本",
+      "质量回归"
+    ]
+  },
+  {
+    "id": "retrieval-021",
+    "category": "architecture",
+    "question": "MLA、GQA 和 MQA 分别通过什么方式降低 KV Cache 的压力？",
+    "expected_source_files": [
+      "04_模型架构/模型架构.md",
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "MLA",
+      "GQA",
+      "MQA",
+      "KV Cache"
+    ]
+  },
+  {
+    "id": "retrieval-022",
+    "category": "training",
+    "question": "LoRA 和 QLoRA 为什么适合资源有限时做模型适配？",
+    "expected_source_files": [
+      "05_训练与后训练/训练与后训练.md"
+    ],
+    "expected_keywords": [
+      "LoRA",
+      "QLoRA",
+      "低秩",
+      "参数高效"
+    ]
+  },
+  {
+    "id": "retrieval-023",
+    "category": "inference",
+    "question": "KV Cache 的压缩、稀疏和架构优化三条路线分别是什么？",
+    "expected_source_files": [
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "KV Cache",
+      "量化",
+      "稀疏",
+      "GQA",
+      "MLA"
+    ]
+  },
+  {
+    "id": "retrieval-024",
+    "category": "reasoning",
+    "question": "ORM、PRM 和规则验证器分别评估推理过程的什么部分？",
+    "expected_source_files": [
+      "横切专题_Reasoning与Test-time Compute.md"
+    ],
+    "expected_keywords": [
+      "ORM",
+      "PRM",
+      "最终答案",
+      "推理过程",
+      "规则验证器"
+    ]
+  },
+  {
+    "id": "retrieval-025",
+    "category": "safety",
+    "question": "为什么 Agent 的工具调用需要最小权限、确认和审计日志？",
+    "expected_source_files": [
+      "横切专题_评测安全与治理.md"
+    ],
+    "expected_keywords": [
+      "工具滥用",
+      "最小权限",
+      "确认",
+      "审计"
+    ]
+  },
+  {
+    "id": "retrieval-026",
+    "category": "application",
+    "question": "Agent 系统中任务状态、工具调用和失败恢复为什么需要一起设计？",
+    "expected_source_files": [
+      "07_应用系统/应用系统.md"
+    ],
+    "expected_keywords": [
+      "任务状态",
+      "工具调用",
+      "失败",
+      "重试",
+      "回滚"
+    ]
+  },
+  {
+    "id": "retrieval-027",
+    "category": "inference",
+    "question": "投机解码在哪些生成场景中收益明显，又在哪些场景中收益会下降？",
+    "expected_source_files": [
+      "06_推理与模型服务/推理与模型服务.md"
+    ],
+    "expected_keywords": [
+      "投机解码",
+      "低温",
+      "代码补全",
+      "高随机性",
+      "长推理"
+    ]
+  },
+  {
+    "id": "retrieval-028",
+    "category": "out_of_domain",
+    "question": "今天 OpenAI 发布了什么新模型？",
+    "expected_source_files": [],
+    "expected_keywords": []
+  },
+  {
+    "id": "retrieval-029",
+    "category": "out_of_domain",
+    "question": "北京下周末的天气预报是什么？",
+    "expected_source_files": [],
+    "expected_keywords": []
+  },
+  {
+    "id": "retrieval-030",
+    "category": "out_of_domain",
+    "question": "请给我推荐一台适合运行大模型的笔记本电脑并提供当前价格。",
+    "expected_source_files": [],
+    "expected_keywords": []
+  }
+]
