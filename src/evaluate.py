@@ -6,6 +6,7 @@ import argparse
 from bm25 import BM25Index, search_bm25
 from retrieve import build_idf, load_chunks, search_chunks
 from query_guard import static_corpus_rejection_reason
+from multi_query import search_multi_query
 
 # TOP_K = 5
 # # RETRIEVAL_METHOD = "idf"
@@ -27,7 +28,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--method",
-        choices=("idf", "bm25"),
+        # choices=("idf", "bm25"),
+        choices=("idf", "bm25", "multi_query"),
         default=DEFAULT_RETRIEVAL_METHOD,
         help="使用的检索方法。",
     )
@@ -103,6 +105,13 @@ def evaluate_case(
         )
     elif retrieval_method == "bm25":
         results = search_bm25(
+            question,
+            chunks,
+            bm25_index,
+            top_k=top_k,
+        )
+    elif retrieval_method == "multi_query":
+        results = search_multi_query(
             question,
             chunks,
             bm25_index,

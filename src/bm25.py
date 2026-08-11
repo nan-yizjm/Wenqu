@@ -1,7 +1,9 @@
 import math
 from collections import Counter
-
-from retrieve import tokenize_query, tokenize
+try:
+    from .retrieve import tokenize_query, tokenize
+except ImportError:
+    from retrieve import tokenize_query, tokenize
 
 
 class BM25Index:
