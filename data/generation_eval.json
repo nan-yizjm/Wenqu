@@ -1,0 +1,146 @@
+[
+  {
+    "id": "gen-001",
+    "question": "PagedAttention 是什么？它解决什么问题？",
+    "category": "single_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["PagedAttention", "KV Cache", "碎片"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-002",
+    "question": "Prefill 和 Decode 分别是什么？它们在推理中的主要差异是什么？",
+    "category": "single_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["Prefill", "Decode"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-003",
+    "question": "GRPO 和 RLVR 有什么关系？",
+    "category": "single_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["GRPO", "RLVR", "可验证"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-004",
+    "question": "LoRA 和 QLoRA 主要解决什么问题？",
+    "category": "single_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["高效微调"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-005",
+    "question": "为什么大模型推理会受到显存容量和 KV Cache 的影响？",
+    "category": "single_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["显存", "KV Cache"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-006",
+    "question": "显存容量、HBM 带宽和高速互联分别会约束大模型系统的什么能力？",
+    "category": "multi_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["显存容量", "HBM 带宽", "高速互联"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-007",
+    "question": "MLA、GQA 和 MQA 分别通过什么方式降低 KV Cache 的压力？",
+    "category": "multi_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["MLA", "GQA", "MQA", "KV Cache"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-008",
+    "question": "Skills、Memory 和 Context Engineering 在 Agent 中分别起什么作用？",
+    "category": "multi_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["Skills", "Memory", "Context Engineering"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-009",
+    "question": "RAG、Agent 和多模态能力分别为大模型补足了什么？",
+    "category": "multi_concept",
+    "expected_behavior": "answer",
+    "must_mention": ["RAG", "Agent", "多模态"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-010",
+    "question": "一个基础 RAG 系统从用户问题到最终回答通常经历哪些步骤？",
+    "category": "synthesis",
+    "expected_behavior": "answer",
+    "must_mention": ["检索", "上下文", "生成"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-011",
+    "question": "从预训练到后训练，再到推理服务，一个大模型系统通常经历哪些阶段？",
+    "category": "synthesis",
+    "expected_behavior": "answer",
+    "must_mention": ["预训练", "后训练", "推理"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-012",
+    "question": "如何判断一个知识库问答系统是否真的变好了？",
+    "category": "synthesis",
+    "expected_behavior": "answer",
+    "must_mention": ["评测集", "检索", "生成"],
+    "must_cite": true
+  },
+  {
+    "id": "gen-013",
+    "question": "请给出 PagedAttention 的完整 CUDA Kernel、页表数据结构和逐行执行过程。",
+    "category": "insufficient",
+    "expected_behavior": "abstain",
+    "must_mention": [],
+    "must_cite": true
+  },
+  {
+    "id": "gen-014",
+    "question": "请从零实现一个生产级 GRPO Trainer，并解释每个分布式通信细节。",
+    "category": "insufficient",
+    "expected_behavior": "abstain",
+    "must_mention": [],
+    "must_cite": true
+  },
+  {
+    "id": "gen-015",
+    "question": "北京明天天气怎么样？",
+    "category": "ood",
+    "expected_behavior": "reject",
+    "must_mention": [],
+    "must_cite": false
+  },
+  {
+    "id": "gen-016",
+    "question": "今天 OpenAI 发布了什么新模型？",
+    "category": "ood",
+    "expected_behavior": "reject",
+    "must_mention": [],
+    "must_cite": false
+  },
+  {
+    "id": "gen-017",
+    "question": "现在比特币的实时价格是多少？",
+    "category": "ood",
+    "expected_behavior": "reject",
+    "must_mention": [],
+    "must_cite": false
+  },
+  {
+    "id": "gen-018",
+    "question": "请帮我预订明天从北京飞往上海的机票。",
+    "category": "ood",
+    "expected_behavior": "reject",
+    "must_mention": [],
+    "must_cite": false
+  }
+]
