@@ -9,7 +9,7 @@ a = Analysis(
     datas=[(str(root / "web" / "dist"), "web/dist")],
     hiddenimports=["keyring.backends.Windows", "uvicorn.logging", "uvicorn.loops.auto",
                    "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
-                   "uvicorn.lifespan.on"],
+                   "uvicorn.lifespan.on", "multipart", "python_multipart"],
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False,
 )
 pyz = PYZ(a.pure)

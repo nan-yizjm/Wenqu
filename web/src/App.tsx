@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ProductSettings, type SetupState } from './api'
 import { LibraryPage } from './LibraryPage'
+import { ChatPage } from './ChatPage'
 
 type Page = 'library' | 'chat' | 'favorites' | 'settings'
 const nav: { id: Page; icon: string; label: string }[] = [
@@ -118,6 +119,6 @@ export default function App() {
     <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
     <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div></aside>
     <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} /> : page === 'library' ?
-      <LibraryPage setupReload={reload} /> : <><header className="topbar"><span>{nav.find(n => n.id === page)?.label}</span><button className="ghost" onClick={() => setPage('settings')}>运行状态</button></header><EmptyPage page={page} goSettings={() => setPage('settings')} /></>}</main>
+      <LibraryPage setupReload={reload} /> : page === 'chat' ? <ChatPage /> : <><header className="topbar"><span>{nav.find(n => n.id === page)?.label}</span><button className="ghost" onClick={() => setPage('settings')}>运行状态</button></header><EmptyPage page={page} goSettings={() => setPage('settings')} /></>}</main>
   </div>
 }

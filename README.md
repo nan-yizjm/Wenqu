@@ -4,7 +4,7 @@
 
 ## 当前开发状态：个人知识工作台（2026-09-15）
 
-项目主线已经从命令行 RAG 实验切换到可安装的 Windows 产品。阶段 28 完成安装与产品骨架；阶段 29 已接入 Markdown 文件夹、独立 Markdown/PDF 上传、后台任务、文档版本快照、BM25 搜索和来源阅读。Markdown 引用保留章节与行号，PDF 引用保留页码并通过按需加载的 PDF.js 阅读。
+项目主线已经从命令行 RAG 实验切换到可安装的 Windows 产品。阶段 28 完成安装与产品骨架；阶段 29 已接入 Markdown/PDF、版本快照、搜索和来源阅读；阶段 30 已完成 Ollama/DeepSeek 真流式问答、停止与重试、基本追问、会话持久化和点击引用。Markdown 引用保留章节与行号，PDF 引用保留页码并通过按需加载的 PDF.js 阅读。
 
 ```powershell
 # 开发模式
@@ -15,9 +15,9 @@ npm --prefix web run build
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_product.ps1
 ```
 
-产品数据独立保存在 `%LOCALAPPDATA%\ObsidianRAG`；安装目录、开发仓库的 `.env`、旧索引和私人笔记不会被产品入口自动读取。生成仍支持本机 Ollama 与 DeepSeek，DeepSeek 密钥只保存到 Windows 凭据管理器。完整实现与故障记录见[阶段 28：产品骨架与安装验证](docs/学习记录/28-产品骨架与安装验证.md)和[阶段 29：资料库与证据阅读](docs/学习记录/29-资料库与证据阅读.md)。
+产品数据独立保存在 `%LOCALAPPDATA%\ObsidianRAG`；安装目录、开发仓库的 `.env`、旧索引和私人笔记不会被产品入口自动读取。生成仍支持本机 Ollama 与 DeepSeek，DeepSeek 密钥只保存到 Windows 凭据管理器。完整实现与故障记录见[阶段 28：产品骨架与安装验证](docs/学习记录/28-产品骨架与安装验证.md)、[阶段 29：资料库与证据阅读](docs/学习记录/29-资料库与证据阅读.md)和[阶段 30：完整流式问答体验](docs/学习记录/30-完整流式问答体验.md)。
 
-阶段 30 将实现 Ollama/DeepSeek 流式问答、停止、重试、会话保存和基本追问。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
+阶段 31 将实现收藏、备注、回答反馈和 Markdown 导出。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
 
 ## 历史状态：RAG 工程与小模型训练学习（2026-09-14）
 

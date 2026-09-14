@@ -492,7 +492,8 @@ class MaterialService:
         self._dispatch(job_id, self._import_upload, document_id, pending)
         return {"job_id": job_id}
 
-    def search(self, query: str, top_k=8):
+    def retrieve(self, query: str, top_k=8):
+        """返回本次不可变快照上的完整检索片段，供搜索页和问答共同使用。"""
         with self._snapshot_lock:
             snapshot = self._snapshot
         results = search_bm25(query, list(snapshot.chunks), snapshot.index, top_k=top_k)
@@ -501,8 +502,15 @@ class MaterialService:
             "version_id": chunk["version_id"], "title": chunk["document_title"],
             "media_type": chunk["media_type"], "heading_path": chunk["heading_path"],
             "locator": chunk["locator"], "preview": chunk["text"][:360],
+            "text": chunk["text"],
             "score": round(score, 4), "matched_tokens": sorted(tokens),
         } for chunk, score, tokens in results]}
+
+    def search(self, query: str, top_k=8):
+        result = self.retrieve(query, top_k)
+        for item in result["results"]:
+            item.pop("text", None)
+        return result
 
     def source(self, document_id: str, version_id: str):
         row = self.database.fetchone("""

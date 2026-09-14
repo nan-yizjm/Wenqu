@@ -94,6 +94,47 @@ MIGRATIONS = {
             finished_at TEXT
         );
     """,
+    3: """
+        CREATE TABLE conversations (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL CHECK(status IN ('complete', 'streaming', 'stopped', 'failed')),
+            reply_to_message_id TEXT,
+            retry_of_message_id TEXT,
+            provider TEXT,
+            model TEXT,
+            index_version TEXT,
+            retrieval_query TEXT,
+            error_code TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        CREATE INDEX idx_messages_conversation ON messages(conversation_id, created_at);
+        CREATE TABLE message_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            label TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            chunk_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            version_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            heading_path TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            preview TEXT NOT NULL,
+            UNIQUE(message_id, label)
+        );
+        CREATE INDEX idx_message_sources_message ON message_sources(message_id, position);
+    """,
 }
 
 

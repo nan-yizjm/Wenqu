@@ -2,15 +2,18 @@
 
 from contextlib import asynccontextmanager
 import asyncio
+import json
 from pathlib import Path
 import platform
 import sys
+import threading
 
 from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.concurrency import iterate_in_threadpool
 
 from . import PRODUCT_NAME, PRODUCT_VERSION
 from .credentials import CredentialStore
@@ -19,16 +22,18 @@ from .paths import ProductPaths, bundle_root
 from .retrieval_model import RetrievalModelManager
 from .materials import MAX_UPLOAD_BYTES, MaterialService
 from .folder_picker import pick_folder
+from .chat import ChatService
 
 
 ALLOWED_SETTINGS = {
     "provider", "ollama_base_url", "ollama_model", "onboarding_complete",
-    "display_name", "retrieval_mode",
+    "display_name", "retrieval_mode", "deepseek_model",
 }
 DEFAULT_SETTINGS = {
     "provider": "ollama", "ollama_base_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen2.5:7b", "onboarding_complete": False,
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
+    "deepseek_model": "deepseek-chat",
 }
 
 
@@ -40,6 +45,7 @@ class SettingsPatch(BaseModel):
     onboarding_complete: bool | None = None
     display_name: str | None = Field(default=None, max_length=60)
     retrieval_mode: str | None = None
+    deepseek_model: str | None = Field(default=None, max_length=100)
 
     @field_validator("provider")
     @classmethod
@@ -74,13 +80,25 @@ class FolderBody(BaseModel):
     name: str | None = Field(default=None, max_length=100)
 
 
+class ConversationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(default="新会话", max_length=80)
+
+
+class ChatBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str | None = Field(default=None, max_length=4000)
+    retry_message_id: str | None = Field(default=None, max_length=100)
+
+
 def current_settings(database: Database):
     return {**DEFAULT_SETTINGS, **database.get_settings()}
 
 
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                        static_dir: Path | None = None, shutdown_callback=None,
-                       retrieval_model_manager=None, material_run_inline=False):
+                       retrieval_model_manager=None, material_run_inline=False,
+                       chat_client_factory=None):
     paths = (paths or ProductPaths.default()).ensure()
     credentials = credential_store or CredentialStore()
     model_manager = retrieval_model_manager or RetrievalModelManager(paths.model_cache)
@@ -93,6 +111,9 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         app.state.retrieval_model = model_manager
         app.state.materials = MaterialService(
             app.state.database, paths, run_inline=material_run_inline)
+        app.state.chat = ChatService(
+            app.state.database, app.state.materials, credentials,
+            lambda: current_settings(app.state.database), chat_client_factory)
         app.state.runtime_state = {"status": "not_configured", "detail": None}
         yield
 
@@ -251,6 +272,60 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     async def search(request: Request, q: str = Query(min_length=1, max_length=1000),
                      top_k: int = Query(default=8, ge=1, le=20)):
         return request.app.state.materials.search(q, top_k)
+
+    @app.get("/api/v1/conversations")
+    async def conversations(request: Request):
+        return {"conversations": request.app.state.chat.list_conversations()}
+
+    @app.post("/api/v1/conversations")
+    async def create_conversation(body: ConversationBody, request: Request):
+        return request.app.state.chat.create_conversation(body.title)
+
+    @app.get("/api/v1/conversations/{conversation_id}")
+    async def get_conversation(conversation_id: str, request: Request):
+        try:
+            return request.app.state.chat.get_conversation(conversation_id)
+        except KeyError as error:
+            return JSONResponse({"error": "conversation_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.post("/api/v1/conversations/{conversation_id}/messages/stream")
+    async def stream_message(conversation_id: str, body: ChatBody, request: Request):
+        if not body.question and not body.retry_message_id:
+            return JSONResponse({"error": "question_required", "message": "请输入问题。"},
+                                status_code=422)
+        try:
+            request.app.state.chat.validate_stream_request(conversation_id, body.retry_message_id)
+        except KeyError as error:
+            return JSONResponse({"error": "invalid_chat", "message": str(error.args[0])},
+                                status_code=404)
+        cancel = threading.Event()
+        iterator = request.app.state.chat.stream(
+            conversation_id, body.question, body.retry_message_id, cancel)
+
+        async def events():
+            try:
+                async for event in iterate_in_threadpool(iterator):
+                    if await request.is_disconnected():
+                        cancel.set()
+                        break
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            finally:
+                cancel.set()
+                close = getattr(iterator, "close", None)
+                if close:
+                    close()
+
+        return StreamingResponse(events(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/api/v1/conversations/{conversation_id}/messages/{message_id}/stop")
+    async def stop_message(conversation_id: str, message_id: str, request: Request):
+        try:
+            return request.app.state.chat.stop(conversation_id, message_id)
+        except KeyError as error:
+            return JSONResponse({"error": "message_not_found", "message": str(error.args[0])},
+                                status_code=404)
 
     @app.get("/api/v1/documents/{document_id}/versions/{version_id}/source")
     async def document_source(document_id: str, version_id: str, request: Request):

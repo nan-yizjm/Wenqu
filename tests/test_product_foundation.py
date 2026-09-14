@@ -1,12 +1,14 @@
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 
 from fastapi.testclient import TestClient
 
 from src.product.app import create_product_app
 from src.product.credentials import MemoryCredentialStore
-from src.product.database import Database
+from src.product.database import Database, MIGRATIONS
 from src.product.paths import ProductPaths
 from src.product.retrieval_model import MemoryRetrievalModelManager
 
@@ -28,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 2)
+        self.assertEqual(health.json()["database_schema"], 3)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -58,6 +60,19 @@ class ProductFoundationTests(unittest.TestCase):
         self.assertEqual(self.client.patch("/api/v1/settings", json={"unknown": True}).status_code, 422)
         self.assertEqual(self.client.patch("/api/v1/settings", json={
             "ollama_base_url": "http://remote.test:11434"}).status_code, 422)
+
+    def test_existing_schema_two_is_backed_up_and_migrated(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "旧版数据").ensure()
+        with closing(sqlite3.connect(paths.database)) as connection:
+            connection.executescript(MIGRATIONS[1]); connection.executescript(MIGRATIONS[2])
+            connection.execute("PRAGMA user_version = 2")
+            connection.commit()
+        database = Database(paths)
+        self.assertEqual(database.schema_version(), 3)
+        self.assertTrue(database.fetchone(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v3-*.sqlite3"))), 1)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ export type ProductSettings = {
   onboarding_complete: boolean
   display_name: string
   retrieval_mode: 'bm25' | 'hybrid'
+  deepseek_model: string
 }
 
 export type SetupState = {
@@ -21,6 +22,10 @@ export type DocumentItem = { id: string; library_id: string; relative_path: stri
 export type ImportJob = { id: string; job_type: string; status: string; total: number; completed: number; failed: number; message: string | null }
 export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; heading_path: string; locator: { kind: 'markdown'; start_line: number; end_line: number } | { kind: 'pdf'; page: number }; preview: string; score: number; matched_tokens: string[] }
 export type SourceContent = { document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; text: string }
+export type MessageSource = Omit<SearchHit, 'score' | 'matched_tokens'> & { label: string; position?: number }
+export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; sources: MessageSource[] }
+export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }
+export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; provider?: string; model?: string; message?: string; citation_warning?: boolean }
 
 export type RetrievalModelState = {
   status: 'not_downloaded' | 'downloading' | 'loading' | 'verifying' | 'ready' | 'failed'
@@ -71,4 +76,35 @@ export const api = {
     `/api/v1/documents/${documentId}/versions/${versionId}/source`),
   sourceFileUrl: (documentId: string, versionId: string) =>
     `/api/v1/documents/${documentId}/versions/${versionId}/file`,
+  conversations: () => request<{ conversations: Conversation[] }>('/api/v1/conversations'),
+  createConversation: (title = '新会话') => request<Conversation>(
+    '/api/v1/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
+  conversation: (id: string) => request<Conversation>(`/api/v1/conversations/${id}`),
+  streamMessage: async (
+    conversationId: string,
+    body: { question?: string; retry_message_id?: string },
+    onEvent: (event: StreamEvent) => void,
+    signal: AbortSignal,
+  ) => {
+    const response = await fetch(`/api/v1/conversations/${conversationId}/messages/stream`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal,
+    })
+    if (!response.ok || !response.body) {
+      const detail = await response.json().catch(() => ({}))
+      throw new Error(detail.message || `请求失败：${response.status}`)
+    }
+    const reader = response.body.getReader(); const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      const lines = buffer.split('\n'); buffer = lines.pop() || ''
+      for (const line of lines) if (line.trim()) onEvent(JSON.parse(line) as StreamEvent)
+      if (done) break
+    }
+    if (buffer.trim()) onEvent(JSON.parse(buffer) as StreamEvent)
+  },
+  stopMessage: (conversationId: string, messageId: string) => request<{ stopping: boolean }>(
+    `/api/v1/conversations/${conversationId}/messages/${messageId}/stop`, { method: 'POST' }),
 }

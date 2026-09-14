@@ -15,6 +15,7 @@ from .llm import ChatClient, DeepSeekClient, OllamaClient
 from .query_guard import static_corpus_rejection_reason
 from .retrieve import load_chunks
 from .citations import CitationValidation, validate_citations
+from .config import load_env_file
 
 
 SYSTEM_PROMPT = """你是一个个人大模型知识库问答助手。
@@ -512,6 +513,8 @@ class RAGAnswerer:
 
 def create_client(provider: str) -> ChatClient:
     """根据供应商名称创建模型客户端。"""
+    # 旧 CLI 明确选择读取项目 .env；产品入口不会调用这里。
+    load_env_file()
     provider = provider.lower()
 
     if provider == "ollama":
