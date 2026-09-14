@@ -13,7 +13,14 @@ export type SetupState = {
   data_root: string
   steps: Record<string, boolean>
   retrieval_model: RetrievalModelState
+  materials: { total_documents: number; ready_documents: number; chunk_count: number; index_version: string | null }
 }
+
+export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
+export type DocumentItem = { id: string; library_id: string; relative_path: string; display_name: string; media_type: 'markdown' | 'pdf'; status: string; error: string | null; current_version_id: string | null; updated_at: string; library_name: string }
+export type ImportJob = { id: string; job_type: string; status: string; total: number; completed: number; failed: number; message: string | null }
+export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; heading_path: string; locator: { kind: 'markdown'; start_line: number; end_line: number } | { kind: 'pdf'; page: number }; preview: string; score: number; matched_tokens: string[] }
+export type SourceContent = { document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; text: string }
 
 export type RetrievalModelState = {
   status: 'not_downloaded' | 'downloading' | 'loading' | 'verifying' | 'ready' | 'failed'
@@ -24,9 +31,10 @@ export type RetrievalModelState = {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isForm = init?.body instanceof FormData
   const response = await fetch(path, {
     ...init,
-    headers: init?.body ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
+    headers: init?.body && !isForm ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
@@ -45,4 +53,22 @@ export const api = {
   prepareRetrievalModel: () => request<RetrievalModelState>(
     '/api/v1/setup/retrieval-model', { method: 'POST' }),
   retrievalModelStatus: () => request<RetrievalModelState>('/api/v1/setup/retrieval-model'),
+  libraries: () => request<{ libraries: Library[] }>('/api/v1/libraries'),
+  documents: () => request<{ documents: DocumentItem[] }>('/api/v1/documents'),
+  jobs: () => request<{ jobs: ImportJob[] }>('/api/v1/import-jobs'),
+  pickFolder: () => request<{ path: string | null }>('/api/v1/system/pick-folder', { method: 'POST' }),
+  connectFolder: (path: string) => request<{ library_id: string; job_id: string }>(
+    '/api/v1/libraries/folders', { method: 'POST', body: JSON.stringify({ path }) }),
+  refreshLibrary: (id: string) => request<{ job_id: string }>(
+    `/api/v1/libraries/${id}/refresh`, { method: 'POST' }),
+  upload: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ document_id: string; job_id: string }>(
+    '/api/v1/documents/upload', { method: 'POST', body }) },
+  removeDocument: (id: string) => request<{ removed: boolean }>(`/api/v1/documents/${id}`, { method: 'DELETE' }),
+  retryDocument: (id: string) => request<{ job_id: string }>(`/api/v1/documents/${id}/retry`, { method: 'POST' }),
+  search: (query: string) => request<{ query: string; index_version: string | null; results: SearchHit[] }>(
+    `/api/v1/search?q=${encodeURIComponent(query)}`),
+  source: (documentId: string, versionId: string) => request<SourceContent>(
+    `/api/v1/documents/${documentId}/versions/${versionId}/source`),
+  sourceFileUrl: (documentId: string, versionId: string) =>
+    `/api/v1/documents/${documentId}/versions/${versionId}/file`,
 }

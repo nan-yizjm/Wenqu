@@ -1,11 +1,12 @@
 """产品 API：即使没有资料、索引或模型也能启动设置页面。"""
 
 from contextlib import asynccontextmanager
+import asyncio
 from pathlib import Path
 import platform
 import sys
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +17,8 @@ from .credentials import CredentialStore
 from .database import Database
 from .paths import ProductPaths, bundle_root
 from .retrieval_model import RetrievalModelManager
+from .materials import MAX_UPLOAD_BYTES, MaterialService
+from .folder_picker import pick_folder
 
 
 ALLOWED_SETTINGS = {
@@ -65,13 +68,19 @@ class SecretBody(BaseModel):
     api_key: str = Field(min_length=8, max_length=500)
 
 
+class FolderBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=1000)
+    name: str | None = Field(default=None, max_length=100)
+
+
 def current_settings(database: Database):
     return {**DEFAULT_SETTINGS, **database.get_settings()}
 
 
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                        static_dir: Path | None = None, shutdown_callback=None,
-                       retrieval_model_manager=None):
+                       retrieval_model_manager=None, material_run_inline=False):
     paths = (paths or ProductPaths.default()).ensure()
     credentials = credential_store or CredentialStore()
     model_manager = retrieval_model_manager or RetrievalModelManager(paths.model_cache)
@@ -82,6 +91,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         app.state.paths = paths
         app.state.credentials = credentials
         app.state.retrieval_model = model_manager
+        app.state.materials = MaterialService(
+            app.state.database, paths, run_inline=material_run_inline)
         app.state.runtime_state = {"status": "not_configured", "detail": None}
         yield
 
@@ -118,19 +129,20 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         database = request.app.state.database
         settings = current_settings(database)
         model_state = request.app.state.retrieval_model.status()
+        materials = request.app.state.materials.setup_summary()
         return {
             "settings": settings,
             "deepseek_key_configured": request.app.state.credentials.has_deepseek(),
             "data_root": str(paths.root),
             "steps": {
                 "workspace": bool(settings.get("display_name")),
-                "materials": False,
+                "materials": materials["ready_documents"] > 0,
                 "retrieval_model": model_state["status"] == "ready",
                 "generation": (
                     settings["provider"] == "ollama"
                     or request.app.state.credentials.has_deepseek()
                 ),
-            }, "retrieval_model": model_state,
+            }, "retrieval_model": model_state, "materials": materials,
         }
 
     @app.get("/api/v1/setup/retrieval-model")
@@ -169,6 +181,101 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         request.app.state.credentials.delete_deepseek()
         request.app.state.database.event("deepseek_key_deleted")
         return {"configured": False}
+
+    @app.get("/api/v1/libraries")
+    async def libraries(request: Request):
+        return {"libraries": request.app.state.materials.list_libraries()}
+
+    @app.post("/api/v1/system/pick-folder")
+    async def system_pick_folder():
+        try:
+            return {"path": await asyncio.to_thread(pick_folder)}
+        except (RuntimeError, OSError) as error:
+            return JSONResponse({"error": "folder_picker_failed", "message": str(error)},
+                                status_code=500)
+
+    @app.post("/api/v1/libraries/folders")
+    async def connect_folder(body: FolderBody, request: Request):
+        try:
+            return request.app.state.materials.connect_folder(body.path, body.name)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_folder", "message": str(error)}, status_code=422)
+
+    @app.post("/api/v1/libraries/{library_id}/refresh")
+    async def refresh_library(library_id: str, request: Request):
+        try:
+            return request.app.state.materials.refresh_library(library_id)
+        except KeyError as error:
+            return JSONResponse({"error": "library_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.get("/api/v1/documents")
+    async def documents(request: Request):
+        return {"documents": request.app.state.materials.list_documents()}
+
+    @app.post("/api/v1/documents/upload")
+    async def upload_document(request: Request, file: UploadFile = File(...)):
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        try:
+            return request.app.state.materials.upload(file.filename or "未命名文件", data)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_document", "message": str(error)}, status_code=422)
+        finally:
+            await file.close()
+
+    @app.delete("/api/v1/documents/{document_id}")
+    async def remove_document(document_id: str, request: Request):
+        try:
+            request.app.state.materials.remove_document(document_id)
+            return {"removed": True}
+        except KeyError as error:
+            return JSONResponse({"error": "document_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.post("/api/v1/documents/{document_id}/retry")
+    async def retry_document(document_id: str, request: Request):
+        try:
+            return request.app.state.materials.retry_document(document_id)
+        except KeyError as error:
+            return JSONResponse({"error": "document_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "retry_unavailable", "message": str(error)},
+                                status_code=409)
+
+    @app.get("/api/v1/import-jobs")
+    async def import_jobs(request: Request):
+        return {"jobs": request.app.state.materials.list_jobs()}
+
+    @app.get("/api/v1/search")
+    async def search(request: Request, q: str = Query(min_length=1, max_length=1000),
+                     top_k: int = Query(default=8, ge=1, le=20)):
+        return request.app.state.materials.search(q, top_k)
+
+    @app.get("/api/v1/documents/{document_id}/versions/{version_id}/source")
+    async def document_source(document_id: str, version_id: str, request: Request):
+        try:
+            return request.app.state.materials.source(document_id, version_id)
+        except KeyError as error:
+            return JSONResponse({"error": "source_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "source_unavailable", "message": str(error)},
+                                status_code=409)
+
+    @app.get("/api/v1/documents/{document_id}/versions/{version_id}/file")
+    async def document_file(document_id: str, version_id: str, request: Request):
+        try:
+            path, media_type, name = request.app.state.materials.source_file(document_id, version_id)
+            return FileResponse(path, media_type=("application/pdf" if media_type == "pdf"
+                                                  else "text/markdown; charset=utf-8"),
+                                filename=name, content_disposition_type="inline")
+        except KeyError as error:
+            return JSONResponse({"error": "source_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "source_unavailable", "message": str(error)},
+                                status_code=409)
 
     @app.get("/api/v1/system/diagnostics")
     async def diagnostics(request: Request):

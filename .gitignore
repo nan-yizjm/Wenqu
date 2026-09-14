@@ -21,6 +21,7 @@ data/generated/
 web/node_modules/
 web/dist/
 *.tsbuildinfo
+.playwright-cli/
 build/
 dist/
 dist-installer/

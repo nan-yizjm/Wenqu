@@ -25,6 +25,75 @@ MIGRATIONS = {
             created_at TEXT NOT NULL
         );
     """,
+    2: """
+        CREATE TABLE libraries (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('folder', 'uploads')),
+            root_path TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE documents (
+            id TEXT PRIMARY KEY,
+            library_id TEXT NOT NULL REFERENCES libraries(id),
+            source_kind TEXT NOT NULL CHECK(source_kind IN ('folder', 'upload')),
+            relative_path TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            media_type TEXT NOT NULL CHECK(media_type IN ('markdown', 'pdf')),
+            status TEXT NOT NULL,
+            error TEXT,
+            source_mtime_ns INTEGER,
+            source_size INTEGER,
+            checksum TEXT,
+            current_version_id TEXT,
+            removed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(library_id, relative_path)
+        );
+        CREATE TABLE document_versions (
+            id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES documents(id),
+            version_number INTEGER NOT NULL,
+            checksum TEXT NOT NULL,
+            snapshot_path TEXT NOT NULL,
+            extracted_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(document_id, version_number)
+        );
+        CREATE TABLE document_chunks (
+            id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES documents(id),
+            version_id TEXT NOT NULL REFERENCES document_versions(id),
+            position INTEGER NOT NULL,
+            heading_path TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX idx_chunks_version ON document_chunks(version_id, position);
+        CREATE TABLE index_versions (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            document_count INTEGER NOT NULL,
+            chunk_count INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE import_jobs (
+            id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            total INTEGER NOT NULL DEFAULT 0,
+            completed INTEGER NOT NULL DEFAULT 0,
+            failed INTEGER NOT NULL DEFAULT 0,
+            message TEXT,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT
+        );
+    """,
 }
 
 
@@ -101,3 +170,11 @@ class Database:
                 "INSERT INTO app_events(event_type, detail_json, created_at) VALUES (?, ?, ?)",
                 (event_type, json.dumps(detail or {}, ensure_ascii=False), utc_now()),
             )
+
+    def fetchall(self, sql: str, parameters=()):
+        with closing(self.connect()) as connection:
+            return connection.execute(sql, parameters).fetchall()
+
+    def fetchone(self, sql: str, parameters=()):
+        with closing(self.connect()) as connection:
+            return connection.execute(sql, parameters).fetchone()

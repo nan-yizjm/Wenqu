@@ -28,7 +28,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 1)
+        self.assertEqual(health.json()["database_schema"], 2)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 

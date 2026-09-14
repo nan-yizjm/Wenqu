@@ -7,3 +7,4 @@ numpy==2.5.2
 sentence-transformers==6.0.0
 pypdf==6.18.1
 keyring==25.7.0
+python-multipart==0.0.22
