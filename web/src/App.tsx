@@ -1,0 +1,121 @@
+import { useEffect, useState } from 'react'
+import { api, type ProductSettings, type SetupState } from './api'
+
+type Page = 'library' | 'chat' | 'favorites' | 'settings'
+const nav: { id: Page; icon: string; label: string }[] = [
+  { id: 'library', icon: '▤', label: '资料库' },
+  { id: 'chat', icon: '✦', label: '知识问答' },
+  { id: 'favorites', icon: '☆', label: '收藏' },
+  { id: 'settings', icon: '⚙', label: '设置' },
+]
+
+function EmptyPage({ page, goSettings }: { page: Page; goSettings: () => void }) {
+  const content = {
+    library: ['你的资料库还是空的', '连接 Markdown 文件夹或添加 PDF，建立第一个可引用的知识库。', '添加资料'],
+    chat: ['从自己的资料中找到答案', '资料准备完成后，可以提问、追问，并打开每条结论背后的原文。', '前往设置'],
+    favorites: ['把值得保留的结论放在这里', '收藏回答后，可以补充备注并导出为 Markdown。', '了解工作流'],
+    settings: ['', '', ''],
+  }[page]
+  return <section className="empty-state">
+    <div className="empty-glyph">{page === 'library' ? '▥' : page === 'chat' ? '✦' : '☆'}</div>
+    <h2>{content[0]}</h2><p>{content[1]}</p>
+    <button className="primary" onClick={goSettings}>{content[2]}</button>
+  </section>
+}
+
+function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<void> }) {
+  const [form, setForm] = useState<ProductSettings>(setup.settings)
+  const [key, setKey] = useState('')
+  const [message, setMessage] = useState('')
+  const [modelState, setModelState] = useState(setup.retrieval_model)
+  const save = async () => {
+    setMessage('正在保存…')
+    try {
+      await api.saveSettings(form)
+      if (form.provider === 'deepseek' && key) await api.saveDeepSeek(key)
+      await reload(); setKey(''); setMessage('设置已保存')
+    } catch (error) { setMessage(error instanceof Error ? error.message : '保存失败') }
+  }
+  const prepareModel = async () => {
+    setMessage('已开始准备检索模型；首次下载可能需要几分钟。')
+    setModelState(await api.prepareRetrievalModel())
+    const timer = window.setInterval(async () => {
+      try {
+        const state = await api.retrievalModelStatus()
+        setModelState(state)
+        if (state.status === 'ready' || state.status === 'failed') {
+          window.clearInterval(timer)
+          setMessage(state.status === 'ready' ? '检索模型已验证，可在无独立显卡的电脑上运行。' : `模型准备失败：${state.detail}`)
+          await reload()
+        }
+      } catch { window.clearInterval(timer); setMessage('无法读取模型准备状态，请稍后重试。') }
+    }, 1000)
+  }
+  return <div className="settings-page">
+    <header className="page-heading"><div><span className="eyebrow">WORKSPACE SETTINGS</span><h1>设置</h1>
+      <p>配置工作台名称和生成模型。资料与检索模型将在下一步接入。</p></div></header>
+    <div className="settings-grid">
+      <section className="card"><h3>工作台</h3><label>显示名称<input value={form.display_name}
+        onChange={e => setForm({ ...form, display_name: e.target.value })} /></label>
+        <div className="status-row"><span>用户数据</span><code>{setup.data_root}</code></div></section>
+      <section className="card"><h3>生成模型</h3><div className="segmented">
+        <button className={form.provider === 'ollama' ? 'active' : ''} onClick={() => setForm({ ...form, provider: 'ollama' })}>本机 Ollama</button>
+        <button className={form.provider === 'deepseek' ? 'active' : ''} onClick={() => setForm({ ...form, provider: 'deepseek' })}>DeepSeek</button>
+      </div>
+      {form.provider === 'ollama' ? <>
+        <label>服务地址<input value={form.ollama_base_url} onChange={e => setForm({ ...form, ollama_base_url: e.target.value })} /></label>
+        <label>模型名称<input value={form.ollama_model} onChange={e => setForm({ ...form, ollama_model: e.target.value })} /></label>
+      </> : <label>API Key<input type="password" value={key} placeholder={setup.deepseek_key_configured ? '已安全保存；留空则不修改' : '输入 DeepSeek API Key'} onChange={e => setKey(e.target.value)} /></label>}
+      <p className="hint">选择 DeepSeek 后，问题与用于回答的资料片段会发送到该服务。</p></section>
+      <section className="card"><h3>检索模型</h3><div className="status-line"><span className={`dot ${modelState.status === 'ready' ? 'green' : 'amber'}`} />
+        {modelState.status === 'ready' ? 'multilingual-e5-small 已准备' : modelState.detail || '尚未下载'}</div>
+        <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。</p>
+        {modelState.status !== 'ready' && !['downloading', 'loading', 'verifying'].includes(modelState.status) &&
+          <button className="secondary" onClick={prepareModel}>下载并验证模型</button>}</section>
+    </div>
+    <div className="save-bar"><span>{message}</span><button className="primary" onClick={save}>保存设置</button></div>
+  </div>
+}
+
+function Welcome({ setup, done }: { setup: SetupState; done: () => Promise<void> }) {
+  const [name, setName] = useState(setup.settings.display_name)
+  const [provider, setProvider] = useState<'ollama' | 'deepseek'>(setup.settings.provider)
+  const [key, setKey] = useState('')
+  const [error, setError] = useState('')
+  const complete = async () => {
+    try {
+      await api.saveSettings({ display_name: name, provider, onboarding_complete: true })
+      if (provider === 'deepseek' && key) await api.saveDeepSeek(key)
+      await done()
+    } catch (e) { setError(e instanceof Error ? e.message : '保存失败') }
+  }
+  return <main className="welcome"><div className="welcome-copy"><div className="brand-mark">OR</div>
+    <span className="eyebrow">PERSONAL KNOWLEDGE WORKSPACE</span><h1>让你的资料<br />变成可追溯的答案</h1>
+    <p>在本机整理 Markdown 与 PDF，搜索原文、继续追问，并把有价值的结论保存下来。</p>
+    <div className="privacy-note"><strong>资料留在你的电脑</strong><span>只有选择远端模型时，回答所需片段才会发送给服务商。</span></div>
+  </div><div className="setup-card"><span className="step">首次设置 · 1 分钟</span><h2>创建你的工作台</h2>
+    <label>工作台名称<input value={name} onChange={e => setName(e.target.value)} /></label>
+    <label>回答使用</label><div className="provider-cards">
+      <button className={provider === 'ollama' ? 'selected' : ''} onClick={() => setProvider('ollama')}><strong>本机 Ollama</strong><small>资料和回答都留在本机</small></button>
+      <button className={provider === 'deepseek' ? 'selected' : ''} onClick={() => setProvider('deepseek')}><strong>DeepSeek</strong><small>配置 API Key 后使用</small></button>
+    </div>
+    {provider === 'deepseek' && <label>DeepSeek API Key<input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="保存在 Windows 凭据管理器" /></label>}
+    {error && <p className="error">{error}</p>}<button className="primary wide" onClick={complete}>进入工作台 <span>→</span></button>
+    <p className="fineprint">下一步将在工作台中添加资料和准备检索模型。</p></div></main>
+}
+
+export default function App() {
+  const [setup, setSetup] = useState<SetupState | null>(null)
+  const [page, setPage] = useState<Page>('library')
+  const [failure, setFailure] = useState('')
+  const reload = async () => { try { setSetup(await api.setup()) } catch (e) { setFailure(e instanceof Error ? e.message : '无法连接本地服务') } }
+  useEffect(() => { void reload() }, [])
+  if (failure) return <main className="fatal"><h1>工作台没有准备好</h1><p>{failure}</p><button onClick={() => location.reload()}>重新连接</button></main>
+  if (!setup) return <main className="loading"><div className="spinner" /><p>正在打开知识工作台…</p></main>
+  if (!setup.settings.onboarding_complete) return <Welcome setup={setup} done={reload} />
+  return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">OR</div><div><strong>{setup.settings.display_name}</strong><span>个人知识工作台</span></div></div>
+    <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+    <div className="sidebar-status"><span className="dot amber" /><div><strong>等待添加资料</strong><small>本地服务已就绪</small></div></div></aside>
+    <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} /> : <><header className="topbar"><span>{nav.find(n => n.id === page)?.label}</span><button className="ghost" onClick={() => setPage('settings')}>运行状态</button></header><EmptyPage page={page} goSettings={() => setPage('settings')} /></>}</main>
+  </div>
+}

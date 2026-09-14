@@ -2,7 +2,24 @@
 
 一个面向个人 Obsidian 知识库的、可引用且可评测的问答助手。
 
-## 当前开发状态：RAG 工程与小模型训练学习（2026-09-14）
+## 当前开发状态：个人知识工作台（2026-09-15）
+
+项目主线已经从命令行 RAG 实验切换到可安装的 Windows 产品。阶段 28 完成独立产品入口、中文 React 网页、SQLite 版本迁移、Windows 凭据存储、首次设置、CPU E5 准备、单实例启动器和 Windows x64 安装构建。网页会在没有资料、索引或生成模型时先启动，用户可以进入设置修复环境。
+
+```powershell
+# 开发模式
+npm --prefix web run build
+.\.venv\Scripts\python.exe -X utf8 -m src.product_entry --no-browser
+
+# Python 3.12 CPU 发布环境：构建 onedir 和 Inno Setup 安装程序
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_product.ps1
+```
+
+产品数据独立保存在 `%LOCALAPPDATA%\ObsidianRAG`；安装目录、开发仓库的 `.env`、旧索引和私人笔记不会被产品入口自动读取。生成仍支持本机 Ollama 与 DeepSeek，DeepSeek 密钥只保存到 Windows 凭据管理器。完整实现与故障记录见[阶段 28：产品骨架与安装验证](docs/学习记录/28-产品骨架与安装验证.md)。
+
+阶段 29 将接入 Markdown 文件夹、Markdown/PDF 上传、后台导入、搜索和可定位的来源阅读。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
+
+## 历史状态：RAG 工程与小模型训练学习（2026-09-14）
 
 最新学习推进：在[独立挑战集与泛化差距](docs/学习记录/17-独立挑战集与泛化差距.md)之后，已完成 [SFT 目标、数据与训练前基线](docs/学习记录/18-SFT目标数据与训练前基线.md)、[QLoRA 训练与适配器评测](docs/学习记录/19-QLoRA训练与适配器评测.md)，并用[显式 adapter 入口接入真实 RAG](docs/学习记录/20-Adapter接入真实RAG与上下文故障.md)。固定 Qwen2.5-1.5B-Instruct commit，以 4-bit NF4 基座和 9,232,384 个 LoRA 参数在本机 8 GB GPU 完成 68 次更新。
 

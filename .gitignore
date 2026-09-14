@@ -1,5 +1,6 @@
 # Python virtual environment
 .venv/
+.venv-product/
 
 # Python cache and test artifacts
 __pycache__/
@@ -17,3 +18,9 @@ rag.toml
 # Runtime artifacts
 *.log
 data/generated/
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+build/
+dist/
+dist-installer/
