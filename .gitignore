@@ -10,6 +10,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!container/.env.container.example
+rag.toml
+!rag.example.toml
 
 # Runtime artifacts
 *.log

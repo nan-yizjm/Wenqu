@@ -11,6 +11,13 @@ class TokenizeQueryTests(unittest.TestCase):
 
         self.assertEqual(tokens, {"pagedattention"})
 
+    def test_removes_rag_process_question_scaffolding(self) -> None:
+        tokens = tokenize_query(
+            "一个基础 RAG 系统从用户问题到最终回答通常经历哪些步骤？"
+        )
+
+        self.assertEqual(tokens, {"rag"})
+
 
 if __name__ == "__main__":
     unittest.main()

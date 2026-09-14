@@ -1,0 +1,23 @@
+# 构建上下文采用拒绝优先；Dockerfile 只显式 COPY 服务源码和容器配置。
+.git
+.gitignore
+.venv
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache
+
+# 密钥、本机配置和私人运行数据绝不进入镜像。
+.env
+.env.*
+rag.toml
+qlora.toml
+tiny_lm.toml
+data
+
+# 学习材料、测试与历史报告不属于运行镜像。
+docs
+tests
+改进记录.md
+README.md

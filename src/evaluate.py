@@ -3,10 +3,16 @@ from pathlib import Path
 import argparse
 
 # from retrieve import load_chunks, search_chunks
-from bm25 import BM25Index, search_bm25
-from retrieve import build_idf, load_chunks, search_chunks
-from query_guard import static_corpus_rejection_reason
-from multi_query import search_multi_query
+try:
+    from .bm25 import BM25Index, search_bm25
+    from .retrieve import build_idf, load_chunks, search_chunks
+    from .query_guard import static_corpus_rejection_reason
+    from .multi_query import search_multi_query
+except ImportError:
+    from bm25 import BM25Index, search_bm25
+    from retrieve import build_idf, load_chunks, search_chunks
+    from query_guard import static_corpus_rejection_reason
+    from multi_query import search_multi_query
 
 # TOP_K = 5
 # # RETRIEVAL_METHOD = "idf"

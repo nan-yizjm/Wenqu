@@ -1,0 +1,22 @@
+# 与 rag.toml 完全分离；不替换知识库助手使用的 Qwen。
+dataset_dir = 'data/generated/tiny_lm_data_v1'
+
+[model]
+d_model = 128
+heads = 4
+layers = 2
+max_seq_len = 96
+dropout = 0.1
+
+[training]
+device = 'cuda'
+seed = 42
+steps = 300
+batch_size = 16
+block_size = 96
+learning_rate = 0.0005
+weight_decay = 0.01
+warmup_steps = 20
+grad_clip = 1.0
+eval_every = 50
+eval_batch_size = 32

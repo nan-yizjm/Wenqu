@@ -1,0 +1,62 @@
+name: obsidian-rag-local
+
+x-rag-common: &rag-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: obsidian-rag:local
+  volumes:
+    - type: bind
+      source: ${RAG_VAULT_DIR:?请在容器环境文件中设置 RAG_VAULT_DIR}
+      target: /data/vault
+      read_only: true
+    - type: bind
+      source: ./data/generated/container_index_store
+      target: /data/index_store
+    - type: bind
+      source: ${RAG_HF_CACHE_DIR:-./data/generated/container_hf_cache}
+      target: /cache/huggingface
+  extra_hosts:
+    - host.docker.internal:host-gateway
+  restart: "no"
+
+services:
+  rag-model-cache:
+    <<: *rag-common
+    profiles: [tools]
+    command:
+      - python
+      - -m
+      - src.container_prepare
+
+  rag-index:
+    <<: *rag-common
+    profiles: [tools]
+    command:
+      - python
+      - -m
+      - src.index_store
+      - build
+      - --config
+      - /app/container/rag.container.toml
+
+  rag-service:
+    <<: *rag-common
+    environment:
+      OLLAMA_BASE_URL: ${RAG_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${RAG_OLLAMA_MODEL:-qwen2.5:7b}
+    ports:
+      - target: 8000
+        published: ${RAG_PORT:-8000}
+        host_ip: 127.0.0.1
+        protocol: tcp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)); assert d['ready']"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s

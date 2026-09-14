@@ -2,12 +2,30 @@
 
 import json
 import os
+import time
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from src.config import load_env_file
 
 load_env_file()
+
+
+def ollama_metrics(payload: dict, wall_ms: float) -> dict:
+    """保留缺失值；Ollama duration 单位是 ns，不能直接当作 ms。"""
+    result = {"wall_ms": round(wall_ms, 3)}
+    for key in ("total_duration", "load_duration", "prompt_eval_duration", "eval_duration"):
+        value = payload.get(key)
+        result[key.replace("_duration", "_ms")] = (
+            value / 1_000_000 if type(value) in (int, float) and value >= 0 else None)
+    for key in ("prompt_eval_count", "prompt_eval_cached_count", "eval_count"):
+        value = payload.get(key)
+        result[key] = value if type(value) is int and value >= 0 else None
+    duration, count = result["eval_ms"], result["eval_count"]
+    result["decode_tokens_per_second"] = (count * 1000 / duration
+                                           if duration and count is not None else None)
+    result["done_reason"] = payload.get("done_reason")
+    return result
 
 class OllamaClient:
     """通过 Ollama 本地 HTTP API 调用模型。"""
@@ -17,19 +35,24 @@ class OllamaClient:
         model: str = "qwen2.5:7b",
         base_url: str = "http://127.0.0.1:11434",
         timeout: int = 120,
+        generation_options: dict | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.generation_options = dict(generation_options or {})
+        self.last_metrics: dict = {}
 
     def chat(self, messages: list[dict[str, str]]) -> str:
         """发送对话消息，并返回模型生成的纯文本回答。"""
+        self.last_metrics = {}
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "stream": False,
             "options": {
                 "temperature": 0.2,
+                **self.generation_options,
             },
         }
 
@@ -40,6 +63,7 @@ class OllamaClient:
             method="POST",
         )
 
+        started = time.perf_counter()
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
@@ -57,6 +81,7 @@ class OllamaClient:
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError(f"Ollama 返回格式异常：{result}")
 
+        self.last_metrics = ollama_metrics(result, (time.perf_counter() - started) * 1000)
         return content.strip()
 
 class ChatClient(Protocol):

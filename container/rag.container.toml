@@ -1,0 +1,25 @@
+# 容器内路径；Vault 只读挂载，索引与 Hugging Face 缓存分别持久化。
+vault_dir = '/data/vault'
+store_dir = '/data/index_store'
+device = 'cpu'
+max_tokens = 480
+overlap_tokens = 32
+
+provider = 'ollama'
+retriever = 'hybrid'
+top_k = 5
+candidate_k = 20
+rerank = false
+rerank_top_n = 20
+rerank_device = 'cpu'
+context_policy = 'blocks'
+max_context_chars = 2200
+
+# 仍用 loopback 做允许的客户端 Host；Dockerfile 单独以 --bind-host 0.0.0.0
+# 监听容器网卡，Compose 只把宿主机 127.0.0.1 暴露出去。
+host = '127.0.0.1'
+port = 8000
+request_timeout = 90
+max_question_chars = 2000
+max_queue_size = 0
+queue_wait_timeout = 15

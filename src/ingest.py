@@ -192,9 +192,13 @@ def create_chunks(documents: list[dict[str, str]]) -> list[dict[str, str]]:
     return chunks
 
 def main():
-    vault_dir = Path(
-        r"C:\Users\zjm\Documents\Obsidian Vault\10_技术学习\概念笔记\大模型"
-    )
+    import argparse
+    from .settings import DEFAULT_CONFIG, load_settings
+
+    parser = argparse.ArgumentParser(description="从配置中的 Markdown 目录生成旧版实验语料。")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    args = parser.parse_args()
+    vault_dir = load_settings(args.config).vault_dir
 
     project_dir = Path(__file__).resolve().parent.parent
     generated_dir = project_dir / "data" / "generated"

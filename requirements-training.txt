@@ -1,0 +1,5 @@
+# 先按本机平台单独安装可用的 PyTorch；不要用本文件覆盖 CUDA wheel。
+transformers==5.15.1
+peft==0.20.0
+accelerate==1.15.0
+bitsandbytes==0.50.2

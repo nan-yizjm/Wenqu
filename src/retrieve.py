@@ -55,6 +55,7 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 QUERY_STOP_PHRASES = (
+    # 问句模板：它们描述提问方式，而不是知识主题。
     "解决什么问题",
     "分别起什么作用",
     "有什么关系",
@@ -70,7 +71,32 @@ QUERY_STOP_PHRASES = (
     "作用",
     "问题",
     "它",
+    # 范围词和流程问句中的通用词。应在二元组切分前清除，
+    # 否则“系统从”会产生“统从”这类罕见但无语义的 token。
+    "一个",
+    "一种",
+    "这个",
+    "该",
+    "基础",
+    "用户问题",
+    "用户",
+    "系统",
+    "最终回答",
+    "回答",
+    "最终",
+    "通常",
+    "经历",
+    "哪些",
+    "步骤",
+    "能力",
+    "方面",
+    "从",
+    "到",
 )
+
+# 这些字常在中文问句中连接多个成分。将它们替换为空白，可避免
+# 生成“宽和”“和高”之类跨成分二元组；不包含“能”，以免破坏“性能”。
+QUERY_CONNECTOR_PATTERN = re.compile(r"[的了和与在对将把由及等]")
 
 
 def tokenize_query(text: str) -> set[str]:
@@ -83,6 +109,8 @@ def tokenize_query(text: str) -> set[str]:
         reverse=True,
     ):
         cleaned_text = cleaned_text.replace(phrase, " ")
+
+    cleaned_text = QUERY_CONNECTOR_PATTERN.sub(" ", cleaned_text)
 
     return set(tokenize(cleaned_text))
 

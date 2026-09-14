@@ -1,0 +1,23 @@
+# 复制为 rag.toml 后修改；不要提交包含个人绝对路径的 rag.toml。
+vault_dir = 'notes'
+store_dir = 'data/generated/index_store'
+device = 'cpu'
+max_tokens = 480
+overlap_tokens = 32
+
+provider = 'ollama'
+retriever = 'hybrid'
+top_k = 5
+candidate_k = 20
+rerank = false
+rerank_top_n = 20
+rerank_device = 'cpu'
+context_policy = 'blocks'
+max_context_chars = 2200
+
+host = '127.0.0.1'
+port = 8000
+request_timeout = 90
+max_question_chars = 2000
+max_queue_size = 0
+queue_wait_timeout = 15

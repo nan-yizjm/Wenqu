@@ -1,0 +1,73 @@
+{
+  "schema": "tiny-lm-challenge-v1",
+  "frozen_on": "2026-09-14",
+  "source": "project_authored_for_controlled_generalization_study",
+  "selection_policy": "Cases were frozen before running this challenge evaluator. Do not tune the v1 model or cases from these results.",
+  "categories": {
+    "template_shift": "Same people, places and tasks, but a sentence order not used by the two training templates.",
+    "format_shift": "The same domain is expressed as questions, labels or short records instead of prose.",
+    "domain_shift": "Technical knowledge text outside the synthetic work-record domain; some characters may be out of vocabulary."
+  },
+  "cases": [
+    {
+      "id": "challenge-template-001",
+      "category": "template_shift",
+      "text": "小林在图书馆检查材料，整理书页以后保存读书笔记，把发现的问题记在纸上。"
+    },
+    {
+      "id": "challenge-template-002",
+      "category": "template_shift",
+      "text": "检查材料以后，小周在实验室核对数据，保存实验日志，并说明下一次继续检查的内容。"
+    },
+    {
+      "id": "challenge-template-003",
+      "category": "template_shift",
+      "text": "小陈把训练曲线带到教室，先记录问题，再检查误差，完成以后保存整理结果。"
+    },
+    {
+      "id": "challenge-template-004",
+      "category": "template_shift",
+      "text": "项目记录由小许在工作室整理，材料齐全以后开始标记编号，最后把结果保存下来。"
+    },
+    {
+      "id": "challenge-format-001",
+      "category": "format_shift",
+      "text": "人物：小林。地点：图书馆。任务：整理书页。结果：已经保存。"
+    },
+    {
+      "id": "challenge-format-002",
+      "category": "format_shift",
+      "text": "问题：小周在哪里核对数据？回答：实验室。"
+    },
+    {
+      "id": "challenge-format-003",
+      "category": "format_shift",
+      "text": "第一步，检查材料。第二步，标记编号。第三步，保存项目记录。"
+    },
+    {
+      "id": "challenge-format-004",
+      "category": "format_shift",
+      "text": "今天完成什么？检查误差。还有什么没有完成？继续整理训练曲线。"
+    },
+    {
+      "id": "challenge-domain-001",
+      "category": "domain_shift",
+      "text": "PagedAttention通过分页管理KV Cache，减少显存碎片。"
+    },
+    {
+      "id": "challenge-domain-002",
+      "category": "domain_shift",
+      "text": "RAG先检索相关资料，再把证据加入提示词并生成回答。"
+    },
+    {
+      "id": "challenge-domain-003",
+      "category": "domain_shift",
+      "text": "LoRA训练低秩适配矩阵，用较少参数完成模型微调。"
+    },
+    {
+      "id": "challenge-domain-004",
+      "category": "domain_shift",
+      "text": "验证损失下降不能单独证明模型具备通用推理能力。"
+    }
+  ]
+}
