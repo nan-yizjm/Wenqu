@@ -74,6 +74,34 @@ class ProductFoundationTests(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
         self.assertEqual(len(list(paths.backups.glob("workspace-before-v4-*.sqlite3"))), 1)
 
+    def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "恢复数据")
+        healthy = Database(paths)
+        self.assertIsNone(healthy.migration_error)
+        MIGRATIONS[5] = "THIS IS NOT VALID SQL;"
+        try:
+            app = create_product_app(
+                paths, MemoryCredentialStore(),
+                retrieval_model_manager=MemoryRetrievalModelManager())
+            with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+                self.assertEqual(client.get("/api/v1/health").json()["status"],
+                                 "recovery_required")
+                setup = client.get("/api/v1/setup").json()
+                self.assertTrue(setup["recovery_required"])
+                self.assertTrue(setup["recovery_backups"])
+                self.assertEqual(client.get("/api/v1/search", params={"q": "RAG"}).status_code,
+                                 503)
+                restored = client.post("/api/v1/system/recovery/restore", json={
+                    "backup_name": setup["recovery_backups"][0]["name"]})
+                self.assertEqual(restored.status_code, 200)
+                self.assertTrue(restored.json()["restart_required"])
+        finally:
+            MIGRATIONS.pop(5, None)
+        reopened = Database(paths)
+        self.assertIsNone(reopened.migration_error)
+        self.assertEqual(reopened.schema_version(), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

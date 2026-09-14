@@ -28,10 +28,21 @@ if ($Install.ExitCode -ne 0) {
     if (Test-Path -LiteralPath $InstallLog) { Get-Content -LiteralPath $InstallLog -Tail 30 }
     throw "Installer failed: $($Install.ExitCode)"
 }
+$ExpectedDataRetention = $false
 try {
     & (Join-Path $ProjectRoot 'scripts\test_product_bundle.ps1') `
-        -Executable (Join-Path $InstallRoot 'ObsidianRAG.exe') -Port $Port
-    Write-Host "Installer validation passed: $InstallRoot"
+        -Executable (Join-Path $InstallRoot 'ObsidianRAG.exe') -Port $Port `
+        -DataRoot $DataRoot -ExpectedMinimumConversations 0
+    $ExpectedDataRetention = $true
+    $Upgrade = Start-Process -FilePath $InstallerPath -ArgumentList @(
+        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS',
+        "/DIR=$InstallRoot", "/LOG=$InstallLog"
+    ) -WindowStyle Hidden -PassThru -Wait
+    if ($Upgrade.ExitCode -ne 0) { throw "Upgrade install failed: $($Upgrade.ExitCode)" }
+    & (Join-Path $ProjectRoot 'scripts\test_product_bundle.ps1') `
+        -Executable (Join-Path $InstallRoot 'ObsidianRAG.exe') -Port ($Port + 1) `
+        -DataRoot $DataRoot -ExpectedMinimumConversations 1
+    Write-Host "Installer and data-preserving upgrade validation passed: $InstallRoot"
 } finally {
     $Uninstaller = Join-Path $InstallRoot 'unins000.exe'
     if (Test-Path -LiteralPath $Uninstaller) {
@@ -39,6 +50,10 @@ try {
             '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
         ) -WindowStyle Hidden -PassThru -Wait
         if ($Uninstall.ExitCode -ne 0) { throw "Uninstaller failed: $($Uninstall.ExitCode)" }
+    }
+    if ($ExpectedDataRetention -and
+        -not (Test-Path -LiteralPath (Join-Path $DataRoot 'workspace.sqlite3'))) {
+        throw 'Uninstall unexpectedly removed user data.'
     }
     if (Test-Path -LiteralPath $DataRoot) { Remove-Item -LiteralPath $DataRoot -Recurse -Force }
     if (Test-Path -LiteralPath $InstallLog) { Remove-Item -LiteralPath $InstallLog -Force }

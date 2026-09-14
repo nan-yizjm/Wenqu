@@ -25,6 +25,7 @@ Source: "..\dist\ObsidianRAG\*"; DestDir: "{app}"; Flags: ignoreversion recurses
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\用户指南"; Filename: "{app}\_internal\resources\docs\用户指南.md"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："

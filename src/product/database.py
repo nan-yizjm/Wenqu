@@ -187,7 +187,11 @@ class Database:
         self.paths = paths.ensure()
         self.path = self.paths.database
         self._write_lock = threading.RLock()
-        self.migrate()
+        self.migration_error = None
+        try:
+            self.migrate()
+        except Exception as error:
+            self.migration_error = f"{type(error).__name__}: {error}"[:500]
 
     def connect(self):
         connection = sqlite3.connect(self.path, timeout=15)
@@ -228,6 +232,35 @@ class Database:
             for version in pending:
                 connection.executescript(MIGRATIONS[version])
                 connection.execute(f"PRAGMA user_version = {version}")
+
+    def recovery_backups(self):
+        results = []
+        for path in sorted(self.paths.backups.glob("workspace-before-v*-*.sqlite3"), reverse=True):
+            results.append({"name": path.name, "size": path.stat().st_size,
+                            "modified_at": datetime.fromtimestamp(
+                                path.stat().st_mtime, timezone.utc).isoformat()})
+        return results
+
+    def restore_migration_backup(self, name: str):
+        candidates = {item["name"] for item in self.recovery_backups()}
+        if name not in candidates:
+            raise KeyError("迁移备份不存在。")
+        source = (self.paths.backups / name).resolve()
+        if not source.is_relative_to(self.paths.backups.resolve()):
+            raise ValueError("备份路径无效。")
+        with closing(sqlite3.connect(source)) as connection:
+            if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise ValueError("备份数据库完整性检查失败。")
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version < 1 or version > max(MIGRATIONS):
+            raise ValueError("备份数据库版本不兼容。")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        if self.path.exists():
+            shutil.copy2(self.path, self.paths.backups / f"failed-database-{stamp}.sqlite3")
+        temporary = self.path.with_suffix(".restore.tmp")
+        shutil.copy2(source, temporary)
+        temporary.replace(self.path)
+        return {"restored": True, "restart_required": True, "schema_version": version}
 
     def get_settings(self):
         with closing(self.connect()) as connection:

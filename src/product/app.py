@@ -24,6 +24,7 @@ from .materials import MAX_UPLOAD_BYTES, MaterialService
 from .folder_picker import pick_folder
 from .chat import ChatService
 from .organize import OrganizeService
+from .support import MAX_BACKUP_BYTES, SupportService
 
 
 ALLOWED_SETTINGS = {
@@ -110,6 +111,11 @@ class FeedbackBody(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class MigrationRecoveryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    backup_name: str = Field(min_length=1, max_length=300)
+
+
 def current_settings(database: Database):
     return {**DEFAULT_SETTINGS, **database.get_settings()}
 
@@ -128,13 +134,22 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         app.state.paths = paths
         app.state.credentials = credentials
         app.state.retrieval_model = model_manager
-        app.state.materials = MaterialService(
-            app.state.database, paths, run_inline=material_run_inline)
-        app.state.chat = ChatService(
-            app.state.database, app.state.materials, credentials,
-            lambda: current_settings(app.state.database), chat_client_factory)
-        app.state.organize = OrganizeService(app.state.database, paths)
-        app.state.runtime_state = {"status": "not_configured", "detail": None}
+        app.state.runtime_state = ({"status": "recovery_required", "detail": "数据库升级失败"}
+                                   if app.state.database.migration_error else
+                                   {"status": "not_configured", "detail": None})
+        app.state.restore_pending = False
+        if app.state.database.migration_error:
+            app.state.materials = app.state.chat = app.state.organize = app.state.support = None
+        else:
+            app.state.materials = MaterialService(
+                app.state.database, paths, run_inline=material_run_inline)
+            app.state.chat = ChatService(
+                app.state.database, app.state.materials, credentials,
+                lambda: current_settings(app.state.database), chat_client_factory)
+            app.state.organize = OrganizeService(app.state.database, paths)
+            app.state.support = SupportService(
+                app.state.database, paths, lambda: current_settings(app.state.database),
+                credentials, lambda: app.state.runtime_state)
         yield
 
     app = FastAPI(title=PRODUCT_NAME, version=PRODUCT_VERSION, lifespan=lifespan)
@@ -147,6 +162,20 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "local_access_required"}, status_code=403)
         if origin and not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
             return JSONResponse({"error": "local_origin_required"}, status_code=403)
+        if (getattr(request.app.state, "restore_pending", False)
+                and request.url.path not in {"/api/v1/health", "/api/v1/system/shutdown"}):
+            return JSONResponse({"error": "restart_required",
+                                 "message": "数据已恢复，请退出并重新打开知识工作台。"},
+                                status_code=409)
+        database = getattr(request.app.state, "database", None)
+        if (database and database.migration_error and request.url.path.startswith("/api/v1/")
+                and request.url.path not in {"/api/v1/health", "/api/v1/setup",
+                                             "/api/v1/system/recovery",
+                                             "/api/v1/system/recovery/restore",
+                                             "/api/v1/system/shutdown"}):
+            return JSONResponse({"error": "database_recovery_required",
+                                 "message": "数据库升级失败，请先从迁移备份恢复。"},
+                                status_code=503)
         return await call_next(request)
 
     @app.exception_handler(RequestValidationError)
@@ -159,15 +188,28 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     @app.get("/api/v1/health")
     async def health(request: Request):
         database = request.app.state.database
+        try:
+            schema_version = database.schema_version()
+        except Exception:
+            schema_version = None
         return {
-            "status": "ready", "version": PRODUCT_VERSION,
-            "database_schema": database.schema_version(),
+            "status": "recovery_required" if database.migration_error else "ready",
+            "version": PRODUCT_VERSION,
+            "database_schema": schema_version,
             "runtime": request.app.state.runtime_state,
+            "restart_required": request.app.state.restore_pending,
         }
 
     @app.get("/api/v1/setup")
     async def setup(request: Request):
         database = request.app.state.database
+        if database.migration_error:
+            return {"recovery_required": True, "migration_error": "数据库升级未完成",
+                    "recovery_backups": database.recovery_backups(), "data_root": str(paths.root),
+                    "settings": DEFAULT_SETTINGS, "deepseek_key_configured": False,
+                    "steps": {}, "retrieval_model": model_manager.status(),
+                    "materials": {"total_documents": 0, "ready_documents": 0,
+                                  "chunk_count": 0, "index_version": None}}
         settings = current_settings(database)
         model_state = request.app.state.retrieval_model.status()
         materials = request.app.state.materials.setup_summary()
@@ -184,7 +226,27 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                     or request.app.state.credentials.has_deepseek()
                 ),
             }, "retrieval_model": model_state, "materials": materials,
+            "recovery_required": False,
         }
+
+    @app.get("/api/v1/system/recovery")
+    async def recovery_status(request: Request):
+        database = request.app.state.database
+        return {"required": bool(database.migration_error),
+                "backups": database.recovery_backups()}
+
+    @app.post("/api/v1/system/recovery/restore")
+    async def restore_migration(body: MigrationRecoveryBody, request: Request):
+        try:
+            result = request.app.state.database.restore_migration_backup(body.backup_name)
+            request.app.state.restore_pending = True
+            return result
+        except KeyError as error:
+            return JSONResponse({"error": "backup_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_backup", "message": str(error)},
+                                status_code=422)
 
     @app.get("/api/v1/setup/retrieval-model")
     async def retrieval_model_status(request: Request):
@@ -453,6 +515,32 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             "runtime": request.app.state.runtime_state,
             "retrieval_model": request.app.state.retrieval_model.status(),
         }
+
+    @app.get("/api/v1/system/diagnostics/export")
+    async def export_diagnostics(request: Request):
+        path = request.app.state.support.write_diagnostic_report(
+            request.app.state.retrieval_model.status(),
+            request.app.state.materials.setup_summary())
+        return FileResponse(path, media_type="application/json; charset=utf-8",
+                            filename=path.name)
+
+    @app.post("/api/v1/system/backup")
+    async def create_backup(request: Request):
+        path = await asyncio.to_thread(request.app.state.support.create_backup)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
+    @app.post("/api/v1/system/restore")
+    async def restore_backup(request: Request, file: UploadFile = File(...)):
+        data = await file.read(MAX_BACKUP_BYTES + 1)
+        try:
+            result = await asyncio.to_thread(request.app.state.support.restore_backup, data)
+            request.app.state.restore_pending = True
+            return result
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_backup", "message": str(error)},
+                                status_code=422)
+        finally:
+            await file.close()
 
     @app.post("/api/v1/system/shutdown")
     async def shutdown():

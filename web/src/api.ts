@@ -15,6 +15,9 @@ export type SetupState = {
   steps: Record<string, boolean>
   retrieval_model: RetrievalModelState
   materials: { total_documents: number; ready_documents: number; chunk_count: number; index_version: string | null }
+  recovery_required?: boolean
+  migration_error?: string
+  recovery_backups?: { name: string; size: number; modified_at: string }[]
 }
 
 export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
@@ -121,4 +124,15 @@ export const api = {
   favoriteExportUrl: (id: string) => `/api/v1/favorites/${id}/export`,
   feedback: (messageId: string, kind: FeedbackKind, note = '') => request<{ stored_locally: boolean }>(
     '/api/v1/feedback', { method: 'POST', body: JSON.stringify({ message_id: messageId, kind, note }) }),
+  backup: async () => {
+    const response = await fetch('/api/v1/system/backup', { method: 'POST' })
+    if (!response.ok) throw new Error('创建备份失败')
+    return { blob: await response.blob(), disposition: response.headers.get('content-disposition') }
+  },
+  restore: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ restored: boolean; restart_required: boolean }>(
+    '/api/v1/system/restore', { method: 'POST', body }) },
+  diagnosticExportUrl: () => '/api/v1/system/diagnostics/export',
+  shutdown: () => request<{ status: string }>('/api/v1/system/shutdown', { method: 'POST' }),
+  restoreMigration: (backupName: string) => request<{ restored: boolean; restart_required: boolean }>(
+    '/api/v1/system/recovery/restore', { method: 'POST', body: JSON.stringify({ backup_name: backupName }) }),
 }

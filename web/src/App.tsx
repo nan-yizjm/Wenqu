@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type ProductSettings, type SetupState } from './api'
 import { LibraryPage } from './LibraryPage'
 import { ChatPage } from './ChatPage'
@@ -31,6 +31,8 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
   const [key, setKey] = useState('')
   const [message, setMessage] = useState('')
   const [modelState, setModelState] = useState(setup.retrieval_model)
+  const [restartRequired, setRestartRequired] = useState(false)
+  const restoreInput = useRef<HTMLInputElement>(null)
   const save = async () => {
     setMessage('正在保存…')
     try {
@@ -54,6 +56,23 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
       } catch { window.clearInterval(timer); setMessage('无法读取模型准备状态，请稍后重试。') }
     }, 1000)
   }
+  const backup = async () => {
+    setMessage('正在创建完整数据备份…')
+    try {
+      const result = await api.backup(); const url = URL.createObjectURL(result.blob)
+      const link = document.createElement('a'); link.href = url
+      const matched = result.disposition?.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i)
+      link.download = matched ? decodeURIComponent(matched[1]) : 'ObsidianRAG-backup.zip'
+      link.click(); URL.revokeObjectURL(url); setMessage('备份已下载。')
+    } catch (error) { setMessage(error instanceof Error ? error.message : '备份失败') }
+  }
+  const restore = async (file?: File) => {
+    if (!file || !window.confirm('恢复会替换当前工作台数据。系统会先自动创建安全备份，是否继续？')) return
+    setMessage('正在校验并恢复备份…')
+    try { await api.restore(file); setRestartRequired(true); setMessage('恢复完成，需要退出并重新打开工作台。') }
+    catch (error) { setMessage(error instanceof Error ? error.message : '恢复失败') }
+    if (restoreInput.current) restoreInput.current.value = ''
+  }
   return <div className="settings-page">
     <header className="page-heading"><div><span className="eyebrow">WORKSPACE SETTINGS</span><h1>设置</h1>
       <p>配置工作台名称和生成模型。资料与检索模型将在下一步接入。</p></div></header>
@@ -75,8 +94,13 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
         <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。</p>
         {modelState.status !== 'ready' && !['downloading', 'loading', 'verifying'].includes(modelState.status) &&
           <button className="secondary" onClick={prepareModel}>下载并验证模型</button>}</section>
+      <section className="card"><h3>备份、恢复与诊断</h3><p className="hint">备份包含资料快照、会话、收藏和导出，不包含模型缓存或密钥。恢复前会先保存当前数据。</p>
+        <div className="support-actions"><button className="secondary" onClick={() => void backup()}>下载数据备份</button><button className="secondary" onClick={() => restoreInput.current?.click()}>从备份恢复</button>
+          <a className="secondary export-link" href={api.diagnosticExportUrl()}>下载脱敏诊断</a></div>
+        <input ref={restoreInput} className="hidden" type="file" accept=".zip" onChange={event => void restore(event.target.files?.[0])} />
+        {restartRequired && <button className="primary" onClick={() => void api.shutdown()}>退出工作台</button>}</section>
     </div>
-    <div className="save-bar"><span>{message}</span><button className="primary" onClick={save}>保存设置</button></div>
+    <div className="save-bar"><span>{message}</span>{!restartRequired && <button className="primary" onClick={save}>保存设置</button>}</div>
   </div>
 }
 
@@ -107,6 +131,23 @@ function Welcome({ setup, done }: { setup: SetupState; done: () => Promise<void>
     <p className="fineprint">下一步将在工作台中添加资料和准备检索模型。</p></div></main>
 }
 
+function Recovery({ setup }: { setup: SetupState }) {
+  const backups = setup.recovery_backups || []
+  const [selected, setSelected] = useState(backups[0]?.name || '')
+  const [message, setMessage] = useState('')
+  const restore = async () => {
+    if (!selected) return
+    try { await api.restoreMigration(selected); setMessage('恢复完成。请退出后重新打开，系统会再次执行升级。') }
+    catch (error) { setMessage(error instanceof Error ? error.message : '恢复失败') }
+  }
+  return <main className="recovery-page"><section className="setup-card"><span className="step">安全恢复模式</span><h1>数据库升级没有完成</h1>
+    <p>工作台没有继续加载资料或模型，以免扩大损坏。请选择升级前自动备份恢复；当前失败数据库也会另行保留。</p>
+    {backups.length ? <><label>可用迁移备份<select value={selected} onChange={event => setSelected(event.target.value)}>{backups.map(item => <option key={item.name} value={item.name}>{item.name} · {Math.ceil(item.size / 1024)} KB</option>)}</select></label>
+      <button className="primary wide" onClick={() => void restore()}>恢复所选备份</button></> : <p className="error">没有找到可自动恢复的迁移备份。请保留用户数据目录，并使用脱敏日志寻求帮助。</p>}
+    {message && <p className="status-line">{message}</p>}{message && <button className="secondary" onClick={() => void api.shutdown()}>退出工作台</button>}
+  </section></main>
+}
+
 export default function App() {
   const [setup, setSetup] = useState<SetupState | null>(null)
   const [page, setPage] = useState<Page>('library')
@@ -115,6 +156,7 @@ export default function App() {
   useEffect(() => { void reload() }, [])
   if (failure) return <main className="fatal"><h1>工作台没有准备好</h1><p>{failure}</p><button onClick={() => location.reload()}>重新连接</button></main>
   if (!setup) return <main className="loading"><div className="spinner" /><p>正在打开知识工作台…</p></main>
+  if (setup.recovery_required) return <Recovery setup={setup} />
   if (!setup.settings.onboarding_complete) return <Welcome setup={setup} done={reload} />
   return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">OR</div><div><strong>{setup.settings.display_name}</strong><span>个人知识工作台</span></div></div>
     <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>

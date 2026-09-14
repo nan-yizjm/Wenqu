@@ -21,6 +21,7 @@ if (-not (Test-Path .venv-product\Scripts\python.exe)) {
     'torch==2.13.0' --index-url https://download.pytorch.org/whl/cpu
 .\.venv-product\Scripts\python.exe -m pip install `
     -r requirements-product.txt -r requirements-build.txt
+.\.venv-product\Scripts\python.exe .\scripts\generate_license_inventory.py
 .\.venv-product\Scripts\python.exe -m PyInstaller `
     --noconfirm --clean product.spec
 
@@ -35,5 +36,15 @@ if (-not $SkipInstaller) {
         if ($Candidate) { $Compiler = Get-Item -LiteralPath $Candidate }
     }
     if (-not $Compiler) { throw 'Inno Setup 6 was not found. The onedir bundle was built, but the installer was not.' }
-    & $Compiler.Source .\installer\ObsidianRAG.iss
+    $CompilerPath = if ($Compiler -is [System.Management.Automation.CommandInfo]) {
+        $Compiler.Source
+    } else {
+        $Compiler.FullName
+    }
+    & $CompilerPath .\installer\ObsidianRAG.iss
+    $Installer = Resolve-Path '.\dist-installer\ObsidianRAG-Setup-0.2.0-win-x64.exe'
+    $Hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
+    [System.IO.File]::WriteAllText(
+        "$Installer.sha256", "$Hash  $([System.IO.Path]::GetFileName($Installer))`n",
+        [System.Text.UTF8Encoding]::new($false))
 }
