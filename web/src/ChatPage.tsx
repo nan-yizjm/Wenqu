@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type ChatMessage, type Conversation, type MessageSource, type SearchHit, type StreamEvent } from './api'
+import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type SearchHit, type StreamEvent } from './api'
 import { SourcePanel } from './SourcePanel'
 
 function hitFromSource(source: MessageSource): SearchHit {
@@ -88,6 +88,14 @@ export function ChatPage() {
     }
   }
   const create = async () => { const item = await api.createConversation(); await loadList(); await openConversation(item.id) }
+  const favorite = async (item: ChatMessage) => {
+    try { await api.createFavorite(item.id); setMessage('已收藏；可在左侧“收藏”中编辑和导出。') }
+    catch (error) { setMessage(error instanceof Error ? error.message : '收藏失败') }
+  }
+  const feedback = async (item: ChatMessage, kind: FeedbackKind) => {
+    try { await api.feedback(item.id, kind); setMessage('反馈已保存在本机。') }
+    catch (error) { setMessage(error instanceof Error ? error.message : '反馈保存失败') }
+  }
   return <div className={selected ? 'chat-page with-source' : 'chat-page'}>
     <section className="conversation-rail"><button className="primary new-chat" onClick={create}>＋ 新会话</button>
       <div className="conversation-list">{conversations.map(item => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => void openConversation(item.id)}><strong>{item.title}</strong><small>{item.message_count || 0} 条消息</small></button>)}</div>
@@ -98,6 +106,10 @@ export function ChatPage() {
           <div className="message-label">{item.role === 'user' ? '你' : '知识工作台'}{item.status === 'stopped' ? ' · 未完成' : item.status === 'failed' ? ' · 失败' : ''}</div>
           {item.role === 'assistant' ? <AnswerText message={item} open={setSelected} /> : <div className="question-text">{item.content}</div>}
           {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">{item.sources.map(source => <button key={source.label} onClick={() => setSelected(source)}><b>{source.label}</b>{source.title}</button>)}</div>}
+          {item.role === 'assistant' && item.status === 'complete' && <div className="answer-actions">
+            {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}
+            <button onClick={() => void feedback(item, 'helpful')}>有帮助</button><button onClick={() => void feedback(item, 'missing')}>有遗漏</button><button onClick={() => void feedback(item, 'citation_wrong')}>引用不对</button><button onClick={() => void feedback(item, 'answer_wrong')}>回答不对</button>
+          </div>}
           {item.role === 'assistant' && ['failed', 'stopped'].includes(item.status) && !busy && <button className="retry" onClick={() => void run({ retry_message_id: item.id })}>重新生成</button>}
         </article>)}<div ref={bottom} /></div>
       <div className="composer"><textarea value={question} onChange={event => setQuestion(event.target.value)} placeholder="询问你的资料；Shift + Enter 换行" disabled={busy}

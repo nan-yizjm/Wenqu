@@ -23,6 +23,7 @@ from .retrieval_model import RetrievalModelManager
 from .materials import MAX_UPLOAD_BYTES, MaterialService
 from .folder_picker import pick_folder
 from .chat import ChatService
+from .organize import OrganizeService
 
 
 ALLOWED_SETTINGS = {
@@ -91,6 +92,24 @@ class ChatBody(BaseModel):
     retry_message_id: str | None = Field(default=None, max_length=100)
 
 
+class FavoriteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message_id: str = Field(min_length=1, max_length=100)
+
+
+class FavoritePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = Field(default=None, max_length=100)
+    note: str | None = Field(default=None, max_length=4000)
+
+
+class FeedbackBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message_id: str = Field(min_length=1, max_length=100)
+    kind: str = Field(min_length=1, max_length=40)
+    note: str = Field(default="", max_length=2000)
+
+
 def current_settings(database: Database):
     return {**DEFAULT_SETTINGS, **database.get_settings()}
 
@@ -114,6 +133,7 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         app.state.chat = ChatService(
             app.state.database, app.state.materials, credentials,
             lambda: current_settings(app.state.database), chat_client_factory)
+        app.state.organize = OrganizeService(app.state.database, paths)
         app.state.runtime_state = {"status": "not_configured", "detail": None}
         yield
 
@@ -326,6 +346,72 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         except KeyError as error:
             return JSONResponse({"error": "message_not_found", "message": str(error.args[0])},
                                 status_code=404)
+
+    @app.get("/api/v1/favorites")
+    async def favorites(request: Request):
+        return {"favorites": request.app.state.organize.list_favorites()}
+
+    @app.post("/api/v1/favorites")
+    async def create_favorite(body: FavoriteBody, request: Request):
+        try:
+            return request.app.state.organize.create_favorite(body.message_id)
+        except KeyError as error:
+            return JSONResponse({"error": "message_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "favorite_unavailable", "message": str(error)},
+                                status_code=409)
+
+    @app.get("/api/v1/favorites/{favorite_id}")
+    async def get_favorite(favorite_id: str, request: Request):
+        try:
+            return request.app.state.organize.get_favorite(favorite_id)
+        except KeyError as error:
+            return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.patch("/api/v1/favorites/{favorite_id}")
+    async def update_favorite(favorite_id: str, body: FavoritePatch, request: Request):
+        try:
+            return request.app.state.organize.update_favorite(
+                favorite_id, body.title, body.note)
+        except KeyError as error:
+            return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_favorite", "message": str(error)},
+                                status_code=422)
+
+    @app.delete("/api/v1/favorites/{favorite_id}")
+    async def delete_favorite(favorite_id: str, request: Request):
+        try:
+            request.app.state.organize.delete_favorite(favorite_id)
+            return {"deleted": True}
+        except KeyError as error:
+            return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.get("/api/v1/favorites/{favorite_id}/export")
+    async def export_favorite(favorite_id: str, request: Request):
+        try:
+            path = request.app.state.organize.export_markdown(favorite_id)
+            return FileResponse(path, media_type="text/markdown; charset=utf-8",
+                                filename=path.name)
+        except KeyError as error:
+            return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.post("/api/v1/feedback")
+    async def save_feedback(body: FeedbackBody, request: Request):
+        try:
+            return request.app.state.organize.save_feedback(
+                body.message_id, body.kind, body.note)
+        except KeyError as error:
+            return JSONResponse({"error": "message_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_feedback", "message": str(error)},
+                                status_code=422)
 
     @app.get("/api/v1/documents/{document_id}/versions/{version_id}/source")
     async def document_source(document_id: str, version_id: str, request: Request):

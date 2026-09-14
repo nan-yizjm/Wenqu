@@ -135,6 +135,46 @@ MIGRATIONS = {
         );
         CREATE INDEX idx_message_sources_message ON message_sources(message_id, position);
     """,
+    4: """
+        CREATE TABLE favorites (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            provider TEXT,
+            model TEXT,
+            index_version TEXT,
+            generated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE favorite_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            favorite_id TEXT NOT NULL REFERENCES favorites(id) ON DELETE CASCADE,
+            label TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            chunk_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            version_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            heading_path TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            preview TEXT NOT NULL,
+            UNIQUE(favorite_id, label)
+        );
+        CREATE TABLE answer_feedback (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('helpful', 'missing', 'citation_wrong', 'answer_wrong')),
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_favorites_updated ON favorites(updated_at);
+    """,
 }
 
 

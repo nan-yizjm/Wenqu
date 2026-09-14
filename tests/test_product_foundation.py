@@ -30,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 3)
+        self.assertEqual(health.json()["database_schema"], 4)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -69,10 +69,10 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version = 2")
             connection.commit()
         database = Database(paths)
-        self.assertEqual(database.schema_version(), 3)
+        self.assertEqual(database.schema_version(), 4)
         self.assertTrue(database.fetchone(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v3-*.sqlite3"))), 1)
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v4-*.sqlite3"))), 1)
 
 
 if __name__ == "__main__":
