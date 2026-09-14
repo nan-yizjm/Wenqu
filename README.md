@@ -17,7 +17,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_product.ps1
 
 产品数据独立保存在 `%LOCALAPPDATA%\ObsidianRAG`；安装目录、开发仓库的 `.env`、旧索引和私人笔记不会被产品入口自动读取。生成仍支持本机 Ollama 与 DeepSeek，DeepSeek 密钥只保存到 Windows 凭据管理器。完整实现与故障记录见[产品阶段学习记录](docs/学习记录/README.md)。
 
-0.2.0 安装包已在开发机完成安装、覆盖升级、数据保留、卸载保留和发布 EXE 内真实 CPU E5 加载验收。至少两位朋友的独立电脑试用仍是阶段 33 的待办，不计为已完成。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
+0.2.0 安装包已在开发机完成安装、覆盖升级、数据保留、卸载保留和发布 EXE 内真实 CPU E5 加载验收。阶段 33 的[朋友试用清单](docs/朋友试用与反馈.md)、[反馈台账](docs/试用反馈台账.md)和 GitHub Issue 模板已就绪；至少两位朋友的独立电脑试用仍是待办，不计为已完成。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
 
 ## 历史状态：RAG 工程与小模型训练学习（2026-09-14）
 

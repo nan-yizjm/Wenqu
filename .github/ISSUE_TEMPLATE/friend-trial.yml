@@ -1,0 +1,85 @@
+name: 朋友试用问题
+description: 记录安装到导出流程中的真实阻碍（请勿上传私密笔记）
+title: "[Trial] "
+labels: ["friend-trial"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请只提供代号和脱敏信息。不要粘贴 API Key、私密问题/回答、原文、文件名或本机绝对路径。
+  - type: input
+    id: trial_id
+    attributes:
+      label: 试用 ID
+      description: 例如 FRIEND-001，不填真实姓名。
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: 出现步骤
+      options:
+        - 安装与启动
+        - 首次设置与 E5
+        - 资料导入
+        - 搜索与来源
+        - 模型配置
+        - 提问与追问
+        - 收藏与导出
+        - 备份、恢复或升级
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: intent
+    attributes:
+      label: 当时想做什么
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: 实际看到什么
+      description: 请用自己的话描述，并删除私密内容。
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: 最后如何继续
+      options:
+        - 自己解决
+        - 需要别人提示
+        - 无法继续
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: 是否能稳定复现
+      options:
+        - 每次出现
+        - 偶尔出现
+        - 只出现一次
+        - 未尝试复现
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 产品版本
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: safe_diagnostics
+    attributes:
+      label: 可选脱敏诊断摘要
+      description: 优先提供状态和数量，不粘贴业务内容。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我已确认内容不包含 API Key、私密笔记/对话、文件名或本机绝对路径。
+          required: true
