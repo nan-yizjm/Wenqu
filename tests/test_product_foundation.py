@@ -30,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 4)
+        self.assertEqual(health.json()["database_schema"], 5)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -86,17 +86,22 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version = 2")
             connection.commit()
         database = Database(paths)
-        self.assertEqual(database.schema_version(), 4)
+        self.assertEqual(database.schema_version(), 5)
         self.assertTrue(database.fetchone(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v4-*.sqlite3"))), 1)
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v5-*.sqlite3"))), 1)
 
     def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
-        paths = ProductPaths(Path(temporary.name) / "恢复数据")
-        healthy = Database(paths)
-        self.assertIsNone(healthy.migration_error)
-        MIGRATIONS[5] = "THIS IS NOT VALID SQL;"
+        paths = ProductPaths(Path(temporary.name) / "恢复数据").ensure()
+        # 手工停在 v4，这样 pending 会是 [5, 6]：v5 的表重建真的跑起来，
+        # 再让 v6 失败，才能验到重建被回滚。
+        with closing(sqlite3.connect(paths.database)) as connection:
+            for version in (1, 2, 3, 4):
+                connection.executescript(MIGRATIONS[version])
+            connection.execute("PRAGMA user_version = 4")
+            connection.commit()
+        MIGRATIONS[6] = "THIS IS NOT VALID SQL;"
         try:
             app = create_product_app(
                 paths, MemoryCredentialStore(),
@@ -107,6 +112,14 @@ class ProductFoundationTests(unittest.TestCase):
                 setup = client.get("/api/v1/setup").json()
                 self.assertTrue(setup["recovery_required"])
                 self.assertTrue(setup["recovery_backups"])
+                # v5 跑完的那半截必须被回滚。留在中间状态的话，磁盘上要么
+                # 多一张 documents_new，要么整张 documents 不见了。
+                with closing(sqlite3.connect(paths.database)) as probe:
+                    self.assertEqual(probe.execute("PRAGMA user_version").fetchone()[0], 4)
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM sqlite_master WHERE name='documents_new'").fetchone())
+                    self.assertIsNotNone(probe.execute(
+                        "SELECT name FROM sqlite_master WHERE name='documents'").fetchone())
                 self.assertEqual(client.get("/api/v1/search", params={"q": "RAG"}).status_code,
                                  503)
                 restored = client.post("/api/v1/system/recovery/restore", json={
@@ -114,10 +127,75 @@ class ProductFoundationTests(unittest.TestCase):
                 self.assertEqual(restored.status_code, 200)
                 self.assertTrue(restored.json()["restart_required"])
         finally:
-            MIGRATIONS.pop(5, None)
+            MIGRATIONS.pop(6, None)
         reopened = Database(paths)
         self.assertIsNone(reopened.migration_error)
-        self.assertEqual(reopened.schema_version(), 4)
+        self.assertEqual(reopened.schema_version(), 5)
+
+    def test_documents_table_rebuild_keeps_rows_and_widens_media_type(self):
+        """v5 重建 documents，搬数据必须一字不差。
+
+        重建走的是 `INSERT INTO documents_new SELECT * FROM documents`，
+        列顺序如果和 v2 的定义对不上，数据会静默错位——所以这里逐列核对。
+        """
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "重建数据").ensure()
+        with closing(sqlite3.connect(paths.database)) as connection:
+            for version in (1, 2, 3, 4):
+                connection.executescript(MIGRATIONS[version])
+            connection.execute("PRAGMA user_version = 4")
+            connection.execute(
+                """INSERT INTO libraries(id, name, kind, root_path, active, created_at, updated_at)
+                   VALUES ('lib_a', '笔记', 'folder', 'D:/notes', 1, 'now', 'now')""")
+            connection.execute(
+                """INSERT INTO documents(id, library_id, source_kind, relative_path, display_name,
+                        media_type, status, error, source_mtime_ns, source_size, checksum,
+                        current_version_id, removed_at, created_at, updated_at)
+                   VALUES ('doc_a', 'lib_a', 'folder', 'a.md', 'a.md', 'markdown', 'ready',
+                        NULL, 123, 456, 'sum_a', 'ver_a', NULL, 'c', 'u')""")
+            connection.execute(
+                """INSERT INTO document_versions(id, document_id, version_number, checksum,
+                        snapshot_path, extracted_path, created_at)
+                   VALUES ('ver_a', 'doc_a', 1, 'sum_a', 's.md', 'e.json', 'c')""")
+            connection.execute(
+                """INSERT INTO document_chunks(id, document_id, version_id, position,
+                        heading_path, locator_json, text)
+                   VALUES ('chk_a', 'doc_a', 'ver_a', 0, '标题', '{}', '正文')""")
+            connection.commit()
+
+        database = Database(paths)
+        self.assertIsNone(database.migration_error)
+        self.assertEqual(database.schema_version(), 5)
+
+        row = database.fetchone("SELECT * FROM documents WHERE id = 'doc_a'")
+        self.assertEqual(row["relative_path"], "a.md")
+        self.assertEqual(row["display_name"], "a.md")
+        self.assertEqual(row["media_type"], "markdown")
+        self.assertEqual(row["status"], "ready")
+        self.assertEqual(row["source_mtime_ns"], 123)
+        self.assertEqual(row["source_size"], 456)
+        self.assertEqual(row["checksum"], "sum_a")
+        self.assertEqual(row["current_version_id"], "ver_a")
+        self.assertEqual(row["created_at"], "c")
+        self.assertEqual(row["updated_at"], "u")
+        self.assertEqual(row["removed_at"], None)
+        # 子表没被 DROP TABLE 带走，外键也仍然指得回来。
+        self.assertEqual(database.fetchone(
+            "SELECT text FROM document_chunks WHERE id = 'chk_a'")["text"], "正文")
+
+        with closing(database.connect()) as connection:
+            connection.execute(
+                """INSERT INTO documents(id, library_id, source_kind, relative_path, display_name,
+                        media_type, status, created_at, updated_at)
+                   VALUES ('doc_nb', 'lib_a', 'upload', 'n.ipynb', 'n.ipynb', 'notebook',
+                        'ready', 'c', 'u')""")
+            connection.commit()
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    """INSERT INTO documents(id, library_id, source_kind, relative_path,
+                            display_name, media_type, status, created_at, updated_at)
+                       VALUES ('doc_bad', 'lib_a', 'upload', 'x.docx', 'x.docx', 'docx',
+                            'ready', 'c', 'u')""")
 
 
 if __name__ == "__main__":

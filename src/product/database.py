@@ -11,6 +11,10 @@ import threading
 from .paths import ProductPaths
 
 
+# 唯一一个要重建表的迁移。SQLite 改不了 CHECK 约束，只能新建表 + 搬数据 +
+# 换名，而 DROP TABLE 会撞上子表的外键；migrate() 里为此单独关一次外键。
+DOCUMENTS_REBUILD = 5
+
 MIGRATIONS = {
     1: """
         CREATE TABLE settings (
@@ -175,11 +179,45 @@ MIGRATIONS = {
         );
         CREATE INDEX idx_favorites_updated ON favorites(updated_at);
     """,
+    5: """
+        CREATE TABLE documents_new (
+            id TEXT PRIMARY KEY,
+            library_id TEXT NOT NULL REFERENCES libraries(id),
+            source_kind TEXT NOT NULL CHECK(source_kind IN ('folder', 'upload')),
+            relative_path TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            media_type TEXT NOT NULL CHECK(media_type IN ('markdown', 'pdf', 'notebook')),
+            status TEXT NOT NULL,
+            error TEXT,
+            source_mtime_ns INTEGER,
+            source_size INTEGER,
+            checksum TEXT,
+            current_version_id TEXT,
+            removed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(library_id, relative_path)
+        );
+        INSERT INTO documents_new SELECT * FROM documents;
+        DROP TABLE documents;
+        ALTER TABLE documents_new RENAME TO documents;
+    """,
 }
 
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def migration_statements(script: str):
+    """把一段迁移脚本切成可逐条执行的语句。
+
+    不能再用 `executescript`：它会在执行前隐式 COMMIT，顺手把外层
+    `BEGIN IMMEDIATE` 一起提交掉，整段迁移因此不是原子的。v5 要重建
+    documents，中途失败会留下一个没有 documents 表的数据库，所以必须
+    逐条跑在同一个事务里。脚本里没有触发器，按分号切就够了。
+    """
+    return [statement.strip() for statement in script.split(";") if statement.strip()]
 
 
 class Database:
@@ -228,10 +266,28 @@ class Database:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             backup = self.paths.backups / f"workspace-before-v{pending[-1]}-{stamp}.sqlite3"
             shutil.copy2(self.path, backup)
-        with self.transaction() as connection:
-            for version in pending:
-                connection.executescript(MIGRATIONS[version])
-                connection.execute(f"PRAGMA user_version = {version}")
+        # v5 重建 documents：DROP TABLE 在 foreign_keys=ON 时会先做一次隐式
+        # DELETE 清空表，子表（document_versions / document_chunks）里已有的
+        # 引用会让它当场报错。而该 PRAGMA 在事务内是空操作，所以只能在整个
+        # 迁移之外关掉它，跑完再打开。
+        rebuilds_documents = DOCUMENTS_REBUILD in pending
+        with self._write_lock, closing(self.connect()) as connection:
+            if rebuilds_documents:
+                connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                for version in pending:
+                    for statement in migration_statements(MIGRATIONS[version]):
+                        connection.execute(statement)
+                    connection.execute(f"PRAGMA user_version = {version}")
+                connection.commit()
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+            finally:
+                if rebuilds_documents:
+                    connection.execute("PRAGMA foreign_keys = ON")
 
     def recovery_backups(self):
         results = []
