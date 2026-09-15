@@ -1,31 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type SearchHit, type SourceContent } from './api'
+import { SkeletonLines } from './components/Placeholders'
 
 function PdfPage({ hit }: { hit: SearchHit }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     let cancelled = false
+    let task: { cancel: () => void } | null = null
     const render = async () => {
       try {
         const pdfjs = await import('pdfjs-dist')
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           'pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
-        const task = pdfjs.getDocument({ url: api.sourceFileUrl(hit.document_id, hit.version_id) })
-        const pdf = await task.promise
+        const pdf = await pdfjs.getDocument({ url: api.sourceFileUrl(hit.document_id, hit.version_id) }).promise
         const pageNumber = hit.locator.kind === 'pdf' ? hit.locator.page : 1
         const page = await pdf.getPage(pageNumber)
-        const viewport = page.getViewport({ scale: 1.35 })
         const target = canvas.current
         if (!target || cancelled) return
-        target.width = viewport.width; target.height = viewport.height
-        const context = target.getContext('2d')
-        if (!context) throw new Error('浏览器无法创建 PDF 画布')
-        await page.render({ canvas: target, canvasContext: context, viewport }).promise
+        // 先按面板宽度排版（CSS 像素），再把后备缓冲按设备像素比放大，
+        // 并让 pdfjs 用同一个倍率绘制。只写 viewport 尺寸的话，高分屏会
+        // 把整张低分辨率位图拉伸到物理像素上，字就糊了。
+        const unscaled = page.getViewport({ scale: 1 })
+        const available = Math.max((target.parentElement?.clientWidth ?? unscaled.width) - 30, 240)
+        const viewport = page.getViewport({ scale: available / unscaled.width })
+        const ratio = window.devicePixelRatio || 1
+        target.width = Math.round(viewport.width * ratio)
+        target.height = Math.round(viewport.height * ratio)
+        const rendering = page.render({
+          canvas: target, viewport,
+          transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
+        })
+        task = rendering
+        await rendering.promise
       } catch (reason) { if (!cancelled) setError(reason instanceof Error ? reason.message : 'PDF 加载失败') }
     }
     void render()
-    return () => { cancelled = true }
+    return () => { cancelled = true; task?.cancel() }
   }, [hit])
   return error ? <p className="panel-error">{error}</p> : <canvas className="pdf-canvas" ref={canvas} />
 }
@@ -43,7 +54,7 @@ export function SourcePanel({ hit, close }: { hit: SearchHit; close: () => void 
       <button className="icon-button" onClick={close} aria-label="关闭来源">×</button></header>
     <div className="source-location">{hit.locator.kind === 'pdf' ? `第 ${hit.locator.page} 页` : `第 ${hit.locator.start_line}–${hit.locator.end_line} 行`} · 历史快照</div>
     {error ? <p className="panel-error">{error}</p> : hit.media_type === 'pdf' ? <PdfPage hit={hit} /> : !source ?
-      <div className="panel-loading">正在打开来源…</div> : <div className="markdown-source">{lines.map((line, index) => {
+      <SkeletonLines count={8} className="panel-skeleton" /> : <div className="markdown-source">{lines.map((line, index) => {
         const number = index + 1
         const selected = hit.locator.kind === 'markdown' && number >= hit.locator.start_line && number <= hit.locator.end_line
         return <div key={number} className={selected ? 'source-line selected' : 'source-line'}>

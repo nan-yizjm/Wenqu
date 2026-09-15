@@ -23,7 +23,8 @@ export const AnswerMarkdown = memo(function AnswerMarkdown({ content, sources, o
       components={{
         a: ({ href, children }) => {
           const source = byLabel.get(citationLabel(href) || '')
-          if (source) return <button className="citation" onClick={() => open(source)}>{children}</button>
+          if (source) return <button className="citation" aria-label={`引用 ${source.label}：${source.title}`}
+                onClick={() => open(source)}>{children}</button>
           // 模型可以自己写 [S9](#cite-S9)；标签不在来源里就退回纯文本。
           if (href && href.startsWith('#cite-')) return <span className="citation-invalid">{children}</span>
           if (!href) return <span>{children}</span>

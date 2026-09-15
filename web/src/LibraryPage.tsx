@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type BundledResource, type DocumentItem, type ImportJob, type Library, type SearchHit } from './api'
 import { SourcePanel } from './SourcePanel'
+import { EmptyState, SkeletonLines } from './components/Placeholders'
 
 export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> }) {
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -12,6 +13,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const [hits, setHits] = useState<SearchHit[]>([])
   const [selected, setSelected] = useState<SearchHit | null>(null)
   const [message, setMessage] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const uploadInput = useRef<HTMLInputElement>(null)
   const load = async () => {
     const [libraryData, documentData, jobData, resourceData] = await Promise.all(
@@ -20,7 +22,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
     setExamples(resourceData.examples)
     await setupReload()
   }
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load().catch(e => setMessage(e instanceof Error ? e.message : '无法读取资料库')).finally(() => setLoaded(true)) }, [])
   useEffect(() => {
     if (!jobs.some(job => ['pending', 'running'].includes(job.status))) return
     const timer = window.setInterval(() => void load(), 900)
@@ -82,14 +84,15 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
         {hits.map(hit => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}><div><span className="file-type">{hit.media_type === 'pdf' ? 'PDF' : 'MD'}</span><strong>{hit.title}</strong></div>
           <small>{hit.heading_path} · {hit.locator.kind === 'pdf' ? `第 ${hit.locator.page} 页` : `第 ${hit.locator.start_line}–${hit.locator.end_line} 行`}</small><p>{hit.preview}</p></button>)}</section>}
       <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span></div>
-        {documents.length === 0 ? <div className="table-empty">
-          <p>添加第一份资料后，可以在这里查看处理状态和原文版本。</p>
-          {examples.length > 0 && <>
-            <p className="hint">不确定从哪开始？先导入随安装包提供的合成示例，它不包含任何个人笔记。</p>
-            <div className="empty-actions">{examples.map(item => <button key={item.name}
-              className="secondary" onClick={() => void importExample(item.name)}>导入随包示例「{item.name}」</button>)}</div>
-          </>}
-        </div> :
+        {!loaded ? <div className="documents-skeleton"><SkeletonLines count={3} /></div>
+          : documents.length === 0 ? <EmptyState glyph="▤" title="还没有接入资料">
+            <p>添加第一份资料后，可以在这里查看处理状态和原文版本。</p>
+            {examples.length > 0 && <>
+              <p className="hint">不确定从哪开始？先导入随安装包提供的合成示例，它不包含任何个人笔记。</p>
+              <div className="empty-actions">{examples.map(item => <button key={item.name}
+                className="secondary" onClick={() => void importExample(item.name)}>导入随包示例「{item.name}」</button>)}</div>
+            </>}
+          </EmptyState> :
           <div className="document-list">{documents.map(document => <div className="document-row" key={document.id}><span className="file-icon">{document.media_type === 'pdf' ? 'PDF' : 'MD'}</span>
             <div><strong>{document.display_name}</strong><small>{document.library_name} / {document.relative_path}</small>{document.error && <em>{document.error}</em>}</div>
             <span className={`status-chip ${document.status}`}>{document.status === 'ready' ? '可搜索' : document.status === 'failed' ? '失败' : document.status === 'processing' ? '处理中' : document.status}</span>

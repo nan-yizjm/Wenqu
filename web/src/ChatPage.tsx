@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type SearchHit, type StreamEvent } from './api'
 import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
+import { EmptyState, SkeletonLines } from './components/Placeholders'
 
 function hitFromSource(source: MessageSource): SearchHit {
   return { ...source, score: 0, matched_tokens: [] }
@@ -48,6 +49,7 @@ export function ChatPage() {
   const [message, setMessage] = useState('')
   const [selected, setSelected] = useState<MessageSource | null>(null)
   const [savedFeedback, setSavedFeedback] = useState<Record<string, { kind: FeedbackKind; note: string }>>({})
+  const [loaded, setLoaded] = useState(false)
   const controller = useRef<AbortController | null>(null)
   const streamingMessage = useRef<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
@@ -60,8 +62,11 @@ export function ChatPage() {
     const conversation = items[0] || await api.createConversation()
     setActive(await api.conversation(conversation.id))
     if (!items.length) await loadList()
-  })().catch(error => setMessage(error.message)) }, [])
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }) }, [active?.messages])
+  })().catch(error => setMessage(error.message)).finally(() => setLoaded(true)) }, [])
+  useEffect(() => {
+    bottom.current?.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+  }, [active?.messages])
 
   const run = async (body: { question?: string; retry_message_id?: string; skip_guard?: boolean }) => {
     if (!active || busy) return
@@ -136,7 +141,10 @@ export function ChatPage() {
       <div className="conversation-list">{conversations.map(item => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => void openConversation(item.id)}><strong>{item.title}</strong><small>{item.message_count || 0} 条消息</small></button>)}</div>
     </section>
     <section className="chat-main"><header><div><span className="eyebrow">GROUNDED ANSWERS</span><h1>{active?.title || '知识问答'}</h1></div><span className="chat-note">每次回答都会重新检索当前资料</span></header>
-      <div className="message-list">{!active?.messages?.length && <div className="chat-empty"><div>✦</div><h2>从自己的资料开始提问</h2><p>答案中的引用可以直接打开当时使用的原文快照。</p></div>}
+      <div className="message-list" role="log" aria-live="polite" aria-busy={busy}>
+        {!loaded ? <div className="message-skeleton"><SkeletonLines count={4} /></div>
+          : !active?.messages?.length ? <EmptyState glyph="✦" title="从自己的资料开始提问" tall>
+            <p>答案中的引用可以直接打开当时使用的原文快照。</p></EmptyState> : null}
         {active?.messages?.map(item => <article key={item.id} className={`message ${item.role} ${item.status}`}>
           <div className="message-label">{item.role === 'user' ? '你' : '知识工作台'}{item.status === 'stopped' ? ' · 未完成' : item.status === 'failed' ? ' · 失败' : ''}</div>
           {item.role === 'user' ? <div className="question-text">{item.content}</div>

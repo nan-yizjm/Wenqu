@@ -1,3 +1,5 @@
+import { describeFailure, OFFLINE_HINT } from './lib/errors'
+
 export type ProductSettings = {
   provider: 'ollama' | 'deepseek'
   ollama_base_url: string
@@ -57,13 +59,18 @@ export type RetrievalModelState = {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = init?.body instanceof FormData
-  const response = await fetch(path, {
-    ...init,
-    headers: init?.body && !isForm ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(path, {
+      ...init,
+      headers: init?.body && !isForm ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
+    })
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === 'AbortError') throw reason
+    throw new Error(OFFLINE_HINT)
+  }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.message || body.error || `请求失败：${response.status}`)
+    throw new Error(describeFailure(response.status, await response.json().catch(() => null)))
   }
   return response.json() as Promise<T>
 }
@@ -110,13 +117,18 @@ export const api = {
     onEvent: (event: StreamEvent) => void,
     signal: AbortSignal,
   ) => {
-    const response = await fetch(`/api/v1/conversations/${conversationId}/messages/stream`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal,
-    })
+    let response: Response
+    try {
+      response = await fetch(`/api/v1/conversations/${conversationId}/messages/stream`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal,
+      })
+    } catch (reason) {
+      if (reason instanceof DOMException && reason.name === 'AbortError') throw reason
+      throw new Error(OFFLINE_HINT)
+    }
     if (!response.ok || !response.body) {
-      const detail = await response.json().catch(() => ({}))
-      throw new Error(detail.message || `请求失败：${response.status}`)
+      throw new Error(describeFailure(response.status, await response.json().catch(() => null)))
     }
     const reader = response.body.getReader(); const decoder = new TextDecoder()
     let buffer = ''
@@ -144,7 +156,7 @@ export const api = {
     '/api/v1/feedback', { method: 'POST', body: JSON.stringify({ message_id: messageId, kind, note }) }),
   backup: async () => {
     const response = await fetch('/api/v1/system/backup', { method: 'POST' })
-    if (!response.ok) throw new Error('创建备份失败')
+    if (!response.ok) throw new Error(describeFailure(response.status, await response.json().catch(() => null)))
     return { blob: await response.blob(), disposition: response.headers.get('content-disposition') }
   },
   restore: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ restored: boolean; restart_required: boolean }>(
