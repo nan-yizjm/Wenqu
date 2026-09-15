@@ -63,6 +63,24 @@ class ProductChatTests(unittest.TestCase):
         self.assertTrue(answer["index_version"].startswith("idx_"))
         self.assertEqual(answer["sources"][0]["locator"]["kind"], "markdown")
 
+    def test_replayed_sources_carry_the_same_evidence_as_the_live_stream(self):
+        """刚答完和翻旧的必须是同一个形状。
+
+        实时事件里带上分数、重放时查不到，界面就得为"刚答完"和"翻旧的"写两套
+        判断；反过来（重放多出键）同样麻烦。所以这里逐键比对。
+        """
+        events = self.events({"question": "PagedAttention 是什么？"})
+        live = events[0]["sources"][0]
+        self.assertEqual(live["label"], "S1")
+        self.assertGreater(live["score"], 0)
+        self.assertIn("pagedattention", live["matched_tokens"])
+        # 只开关键词检索时命中通道是 bm25；向量的名次要等混合检索才有。
+        self.assertEqual(live["channels"], {"bm25": 1})
+
+        replayed = self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").json()["messages"][-1]["sources"][0]
+        self.assertEqual(replayed, live)
+
     def test_followup_rewrites_retrieval_but_history_is_not_evidence(self):
         self.events({"question": "PagedAttention 是什么？"})
         self.events({"question": "它解决什么问题？"})

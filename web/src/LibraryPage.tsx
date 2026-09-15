@@ -3,6 +3,7 @@ import { api, type BundledResource, type DocumentItem, type ImportJob, type Libr
 import { locatorLabel, mediaLabel } from './lib/locator'
 import { SourcePanel } from './SourcePanel'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
+import { HitMeta, Preview, RelevanceBar } from './components/HitMeta'
 
 export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> }) {
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -88,8 +89,12 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
       {hits.length > 0 && <section className="search-results"><div className="section-title"><h2>搜索结果</h2><span>{hits.length} 个片段 · {searched?.effective_mode === 'hybrid' ? '关键词 + 语义' : '关键词'}</span></div>
         {searched && searched.effective_mode !== searched.retrieval_mode &&
           <p className="hint">设置里选的是混合检索，但语义索引还没建好，这次仍按关键词检索。</p>}
-        {hits.map(hit => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}><div><span className="file-type">{mediaLabel(hit.media_type)}</span><strong>{hit.title}</strong></div>
-          <small>{hit.heading_path} · {locatorLabel(hit.locator)}</small><p>{hit.preview}</p></button>)}</section>}
+        {hits.map((hit, index) => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}>
+          <div><span className="file-type">{mediaLabel(hit.media_type)}</span><strong>{hit.title}</strong></div>
+          <small>{hit.heading_path} · {locatorLabel(hit.locator)}</small>
+          <p><Preview text={hit.preview} tokens={hit.matched_tokens} /></p>
+          <div className="result-meta"><RelevanceBar score={hit.score} scores={hits.map(item => item.score)} />
+            <HitMeta hit={hit} rank={index} /></div></button>)}</section>}
       <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span></div>
         {!loaded ? <div className="documents-skeleton"><SkeletonLines count={3} /></div>
           : documents.length === 0 ? <EmptyState glyph="▤" title="还没有接入资料">

@@ -28,6 +28,38 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+# 旧记录没有 `score_json`：那是在引入相关度显示之前存的。补成显式的空值，
+# 让前端只需要判断"有没有分数"，不必再判断"这行是不是老数据"。
+NO_SCORE = {"score": None, "matched_tokens": [], "channels": {}}
+
+
+def _score_json(item):
+    """检索侧用来排序的那点信息，存成 JSON。
+
+    只存界面真正会读的三个字段：融合分、命中词、各路名次。原始通道分（BM25
+    的 4.68 与余弦 0.9）量级互不可比，留在库里只会诱导以后拿它当相关度用。
+    """
+    return json.dumps({
+        "score": item.get("score"), "matched_tokens": list(item.get("matched_tokens", [])),
+        "channels": dict(item.get("channels", {})),
+    }, ensure_ascii=False)
+
+
+def source_record(row) -> dict:
+    """把一行来源记录解成界面用的形状。
+
+    `locator_json` / `score_json` 是存储细节，`id` / `message_id` / `position`
+    是表结构用的（顺序看数组就好）。实时消息和重放的历史消息必须是同一个形状，
+    否则前端要为"刚答完"和"翻旧的"写两套判断——收藏侧也复用这里。
+    """
+    record = dict(row)
+    record["locator"] = json.loads(record.pop("locator_json"))
+    record.update(json.loads(record.pop("score_json", None) or "null") or NO_SCORE)
+    for key in ("id", "message_id", "favorite_id", "position"):
+        record.pop(key, None)
+    return record
+
+
 def _row_message(row, sources=()):
     return {
         "id": row["id"], "conversation_id": row["conversation_id"],
@@ -95,12 +127,9 @@ class ChatService:
             (conversation_id,))
         messages = []
         for row in rows:
-            sources = [dict(item) | {"locator": json.loads(item["locator_json"])}
-                       for item in self.database.fetchall(
-                           "SELECT * FROM message_sources WHERE message_id=? ORDER BY position",
-                           (row["id"],))]
-            for source in sources:
-                source.pop("locator_json", None)
+            sources = [source_record(item) for item in self.database.fetchall(
+                "SELECT * FROM message_sources WHERE message_id=? ORDER BY position",
+                (row["id"],))]
             messages.append(_row_message(row, sources))
         return {**dict(conversation), "messages": messages}
 
@@ -133,12 +162,12 @@ class ChatService:
             for position, item in enumerate(results, 1):
                 connection.execute("""INSERT INTO message_sources(
                     message_id, label, position, chunk_id, document_id, version_id, title,
-                    media_type, heading_path, locator_json, preview)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    media_type, heading_path, locator_json, preview, score_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (message_id, f"S{position}", position, item["chunk_id"], item["document_id"],
                      item["version_id"], item["title"], item["media_type"],
                      item["heading_path"], json.dumps(item["locator"], ensure_ascii=False),
-                     item["preview"]))
+                     item["preview"], _score_json(item)))
 
     def _recent_history(self, conversation_id, exclude_id=None):
         rows = self.database.fetchall("""SELECT * FROM messages
@@ -234,11 +263,11 @@ class ChatService:
             provider=provider, model=model, index_version=retrieval["index_version"],
             retrieval_query=retrieval_query)
         self._sources(assistant_id, results)
-        # 排除的是"没有落库的那部分"：message_sources 只存列出的字段，若让它们
-        # 一起出网，实时消息会带上重放后消失的键，前端就得处理两种形状。
+        # 出的键必须与落库的完全一致：少了分数，刚答完就没有相关度、翻旧的才有；
+        # 多了原始通道分，实时消息会带上重放后消失的键，前端就得处理两种形状。
+        # `text` 是整段原文，只有来源面板按需取，不该塞进每个流式事件。
         public_sources = [{k: v for k, v in item.items()
-                           if k not in {"text", "score", "matched_tokens", "channels",
-                                        "channel_scores", "quality_reason"}}
+                           if k not in {"text", "channel_scores", "quality_reason"}}
                           | {"label": f"S{number}"} for number, item in enumerate(results, 1)]
         yield {"type": "retrieval", "message_id": assistant_id,
                "query": retrieval_query, "index_version": retrieval["index_version"],

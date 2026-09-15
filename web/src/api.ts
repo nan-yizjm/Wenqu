@@ -36,7 +36,12 @@ export type ImportJob = { id: string; job_type: string; status: string; total: n
 export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: MediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[]; channels?: Record<string, number>; channel_scores?: Record<string, number>; quality_reason?: string | null }
 export type SearchResult = { query: string; index_version: string | null; retrieval_mode: 'bm25' | 'hybrid'; effective_mode: 'bm25' | 'hybrid'; results: SearchHit[] }
 export type SourceContent = { document_id: string; version_id: string; title: string; media_type: MediaType; text: string }
-export type MessageSource = Omit<SearchHit, 'score' | 'matched_tokens'> & { label: string; position?: number }
+/**
+ * 来源既可能来自本轮搜索（分数齐全），也可能来自引入分数之前存下的记录。
+ * 后者没有 `score`，界面据此隐藏相关度条，而不是拿 0 冒充。
+ */
+export type SourceRef = Omit<SearchHit, 'score' | 'matched_tokens'> & { score?: number | null; matched_tokens?: string[] }
+export type MessageSource = SourceRef & { label: string }
 export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[] }
 export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }
 export type FavoriteSummary = { id: string; message_id: string; title: string; note: string; question: string; answer: string; provider: string | null; model: string | null; index_version: string | null; generated_at: string | null; updated_at: string; source_count: number }

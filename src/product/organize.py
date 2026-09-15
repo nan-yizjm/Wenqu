@@ -6,6 +6,7 @@ import json
 import re
 import uuid
 
+from .chat import source_record
 from .database import Database, utc_now
 
 
@@ -14,12 +15,6 @@ FEEDBACK_KINDS = {"helpful", "missing", "citation_wrong", "answer_wrong"}
 
 def _id(prefix):
     return f"{prefix}_{uuid.uuid4().hex}"
-
-
-def _source(row):
-    result = dict(row)
-    result["locator"] = json.loads(result.pop("locator_json"))
-    return result
 
 
 def _location(source):
@@ -39,7 +34,7 @@ class OrganizeService:
         row = self.database.fetchone("SELECT * FROM favorites WHERE id=?", (favorite_id,))
         if not row:
             raise KeyError("收藏不存在。")
-        sources = [_source(item) for item in self.database.fetchall(
+        sources = [source_record(item) for item in self.database.fetchall(
             "SELECT * FROM favorite_sources WHERE favorite_id=? ORDER BY position", (favorite_id,))]
         return {**dict(row), "sources": sources}
 
@@ -78,11 +73,13 @@ class OrganizeService:
                  message["completed_at"], now, now))
             for source in sources:
                 connection.execute("""INSERT INTO favorite_sources(favorite_id, label, position,
-                    chunk_id, document_id, version_id, title, media_type, heading_path, locator_json, preview)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    chunk_id, document_id, version_id, title, media_type, heading_path, locator_json,
+                    preview, score_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (favorite_id, source["label"], source["position"], source["chunk_id"], source["document_id"],
                      source["version_id"], source["title"], source["media_type"],
-                     source["heading_path"], source["locator_json"], source["preview"]))
+                     source["heading_path"], source["locator_json"], source["preview"],
+                     source["score_json"]))
         return self._favorite(favorite_id)
 
     def update_favorite(self, favorite_id, title=None, note=None):

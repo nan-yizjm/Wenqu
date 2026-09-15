@@ -202,6 +202,12 @@ MIGRATIONS = {
         DROP TABLE documents;
         ALTER TABLE documents_new RENAME TO documents;
     """,
+    # 检索证据里的排序信息：融合分、命中词、各路名次。加列即可，不必重建表。
+    # 名次本身不需要新列——`position` 一直是检索结果的次序。
+    6: """
+        ALTER TABLE message_sources ADD COLUMN score_json TEXT;
+        ALTER TABLE favorite_sources ADD COLUMN score_json TEXT;
+    """,
 }
 
 

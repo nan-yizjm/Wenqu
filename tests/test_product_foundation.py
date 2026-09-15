@@ -30,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 5)
+        self.assertEqual(health.json()["database_schema"], 6)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -86,22 +86,22 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version = 2")
             connection.commit()
         database = Database(paths)
-        self.assertEqual(database.schema_version(), 5)
+        self.assertEqual(database.schema_version(), 6)
         self.assertTrue(database.fetchone(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v5-*.sqlite3"))), 1)
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v6-*.sqlite3"))), 1)
 
     def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         paths = ProductPaths(Path(temporary.name) / "恢复数据").ensure()
-        # 手工停在 v4，这样 pending 会是 [5, 6]：v5 的表重建真的跑起来，
-        # 再让 v6 失败，才能验到重建被回滚。
+        # 手工停在 v4，这样 pending 会是 [5, 6, 7]：v5 的表重建真的跑起来，
+        # 再让 v7 失败，才能验到重建被回滚。
         with closing(sqlite3.connect(paths.database)) as connection:
             for version in (1, 2, 3, 4):
                 connection.executescript(MIGRATIONS[version])
             connection.execute("PRAGMA user_version = 4")
             connection.commit()
-        MIGRATIONS[6] = "THIS IS NOT VALID SQL;"
+        MIGRATIONS[7] = "THIS IS NOT VALID SQL;"
         try:
             app = create_product_app(
                 paths, MemoryCredentialStore(),
@@ -120,6 +120,10 @@ class ProductFoundationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE name='documents_new'").fetchone())
                     self.assertIsNotNone(probe.execute(
                         "SELECT name FROM sqlite_master WHERE name='documents'").fetchone())
+                    # v6 的两条 ADD COLUMN 落在 v5 之后、v7 之前，同样必须被回滚。
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM pragma_table_info('message_sources')"
+                        " WHERE name='score_json'").fetchone())
                 self.assertEqual(client.get("/api/v1/search", params={"q": "RAG"}).status_code,
                                  503)
                 restored = client.post("/api/v1/system/recovery/restore", json={
@@ -127,10 +131,10 @@ class ProductFoundationTests(unittest.TestCase):
                 self.assertEqual(restored.status_code, 200)
                 self.assertTrue(restored.json()["restart_required"])
         finally:
-            MIGRATIONS.pop(6, None)
+            MIGRATIONS.pop(7, None)
         reopened = Database(paths)
         self.assertIsNone(reopened.migration_error)
-        self.assertEqual(reopened.schema_version(), 5)
+        self.assertEqual(reopened.schema_version(), 6)
 
     def test_documents_table_rebuild_keeps_rows_and_widens_media_type(self):
         """v5 重建 documents，搬数据必须一字不差。
@@ -165,7 +169,7 @@ class ProductFoundationTests(unittest.TestCase):
 
         database = Database(paths)
         self.assertIsNone(database.migration_error)
-        self.assertEqual(database.schema_version(), 5)
+        self.assertEqual(database.schema_version(), 6)
 
         row = database.fetchone("SELECT * FROM documents WHERE id = 'doc_a'")
         self.assertEqual(row["relative_path"], "a.md")

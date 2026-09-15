@@ -64,3 +64,23 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
 .favorites-page.with-source{grid-template-columns:245px minmax(0,1fr)}
 .source-panel{position:fixed;top:0;right:0;bottom:0;width:min(520px,90vw);z-index:30}
 }
+
+/* 检索结果的命中信息：相对相关度、命中通道、命中词。
+   原始分不显示——融合分、BM25 分和重排 logit 量级互不可比。 */
+.result-card mark{background:var(--highlight);color:inherit;border-radius:4px;padding:0 2px}
+.result-meta{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:11px}
+.relevance{display:flex;align-items:center;gap:8px}
+.relevance-track{width:74px;height:5px;border-radius:3px;background:var(--border-soft);overflow:hidden;display:block}
+.relevance-track>span{display:block;height:100%;background:var(--accent-muted);border-radius:3px}
+.relevance small{font-size:10px;color:var(--text-muted)}
+.hit-meta{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.hit-rank{font-size:10px;font-weight:700;color:var(--accent-text);background:var(--accent-weak);padding:3px 6px;border-radius:5px}
+.hit-badge{font-size:10px;color:var(--text-soft);background:var(--surface-2);border:1px solid var(--border-soft);padding:2px 6px;border-radius:5px}
+.hit-token{font-size:10px;color:var(--accent-muted);background:var(--code-bg);padding:2px 6px;border-radius:5px;font-family:Consolas,'Microsoft YaHei UI',monospace}
+.source-chips button{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.source-chips button.selected{border-color:var(--accent-border);background:var(--accent-weaker);box-shadow:inset 0 0 0 1px var(--accent-weak)}
+.source-chips button:hover{border-color:var(--accent-border)}
+.source-chips .hit-meta{gap:4px}
+.source-panel .hit-meta{padding:11px 25px 0;background:var(--accent-weak)}
+.favorite-sources .hit-meta{margin-top:6px}
+.favorite-sources .relevance{margin-top:6px}

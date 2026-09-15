@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type SearchHit, type StreamEvent } from './api'
+import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type StreamEvent } from './api'
 import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
+import { HitMeta } from './components/HitMeta'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
-
-function hitFromSource(source: MessageSource): SearchHit {
-  return { ...source, score: 0, matched_tokens: [] }
-}
 
 const FEEDBACK_KINDS: { kind: FeedbackKind; label: string; hint: string }[] = [
   { kind: 'helpful', label: '有帮助', hint: '答案和引用都对' },
@@ -150,7 +147,12 @@ export function ChatPage() {
           {item.role === 'user' ? <div className="question-text">{item.content}</div>
             : item.status === 'streaming' ? <div className="answer-text">{item.content}</div>
             : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}
-          {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">{item.sources.map(source => <button key={source.label} onClick={() => setSelected(source)}><b>{source.label}</b>{source.title}</button>)}</div>}
+          {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">{item.sources.map(source =>
+            <button key={source.label} title={source.preview}
+              className={selected?.label === source.label ? 'selected' : ''}
+              aria-pressed={selected?.label === source.label}
+              onClick={() => setSelected(source)}>
+              <b>{source.label}</b>{source.title}<HitMeta hit={source} /></button>)}</div>}
           {item.role === 'assistant' && item.status === 'complete' && item.error_code !== 'guard_rejected' && <div className="answer-actions">
             {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}
             <FeedbackPanel saved={savedFeedback[item.id]} onSave={(kind, note) => feedback(item, kind, note)} />
@@ -163,6 +165,6 @@ export function ChatPage() {
         {busy ? <button className="stop" onClick={() => void stop()}>■ 停止</button> : <button className="primary" onClick={() => void run({ question })}>发送</button>}
         {message && <p>{message}</p>}<small>停止远端回答只会断开本地连接，不保证服务商已取消计算或计费。</small></div>
     </section>
-    {selected && <SourcePanel hit={hitFromSource(selected)} close={() => setSelected(null)} />}
+    {selected && <SourcePanel hit={selected} close={() => setSelected(null)} />}
   </div>
 }

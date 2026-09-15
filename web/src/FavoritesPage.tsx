@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
-import { api, type Favorite, type FavoriteSummary, type MessageSource, type SearchHit } from './api'
+import { api, type Favorite, type FavoriteSummary, type MessageSource } from './api'
 import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
+import { HitMeta, RelevanceBar } from './components/HitMeta'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
-
-const asHit = (source: MessageSource): SearchHit => ({ ...source, score: 0, matched_tokens: [] })
 
 export function FavoritesPage() {
   const [items, setItems] = useState<FavoriteSummary[]>([])
@@ -31,8 +30,8 @@ export function FavoritesPage() {
         <p>收藏会保留回答、问题和当时使用的证据快照。</p></EmptyState> : <>
       <header><div><span className="eyebrow">SAVED ANSWER</span><h1>{active.title}</h1></div><div><a className="secondary export-link" href={api.favoriteExportUrl(active.id)}>导出 Markdown</a><button className="row-action" onClick={() => void remove()}>删除</button></div></header>
       <div className="favorite-form"><label>标题<input value={title} onChange={event => setTitle(event.target.value)} /></label><label>备注<textarea value={note} onChange={event => setNote(event.target.value)} placeholder="记录为什么值得保留，或下一步要做什么" /></label><button className="primary" onClick={() => void save()}>保存修改</button><span>{message}</span></div>
-      <article className="favorite-content"><h3>问题</h3><p>{active.question}</p><h3>回答</h3><AnswerMarkdown content={active.answer} sources={active.sources} open={setSource} /><h3>来源</h3><div className="favorite-sources">{active.sources.map(item => <button key={item.label} onClick={() => setSource(item)}><b>{item.label}</b><span><strong>{item.title}</strong><small>{item.heading_path}</small></span></button>)}</div></article>
+      <article className="favorite-content"><h3>问题</h3><p>{active.question}</p><h3>回答</h3><AnswerMarkdown content={active.answer} sources={active.sources} open={setSource} /><h3>来源</h3><div className="favorite-sources">{active.sources.map((item, index) => <button key={item.label} title={item.preview} onClick={() => setSource(item)}><b>{item.label}</b><span><strong>{item.title}</strong><small>{item.heading_path}</small><RelevanceBar score={item.score} scores={active.sources.map(source => source.score)} /><HitMeta hit={item} rank={index} /></span></button>)}</div></article>
     </>}</section>
-    {source && <SourcePanel hit={asHit(source)} close={() => setSource(null)} />}
+    {source && <SourcePanel hit={source} close={() => setSource(null)} />}
   </div>
 }

@@ -32,6 +32,7 @@ class ProductOrganizeTests(unittest.TestCase):
             "text/markdown")}).json()
         self.document_id = uploaded["document_id"]
         conversation = self.client.post("/api/v1/conversations", json={}).json()
+        self.conversation_id = conversation["id"]
         response = self.client.post(
             f"/api/v1/conversations/{conversation['id']}/messages/stream",
             json={"question": "RAG 在线流程是什么？"})
@@ -58,6 +59,22 @@ class ProductOrganizeTests(unittest.TestCase):
         files = list(self.paths.exports.glob("*.md"))
         self.assertEqual(len(files), 1)
         self.assertNotIn("/", files[0].name)
+
+    def test_favorite_keeps_the_retrieval_evidence_of_its_sources(self):
+        """收藏是"以后回看的证据"，当时的名次和命中词必须一起留下来。
+
+        它们只存在 `score_json` 里；丢了的话，收藏页的来源列表会比问答页少一半
+        信息，而用户恰恰是为了核对才收藏的。
+        """
+        answer = self.client.get(
+            f"/api/v1/conversations/{self.conversation_id}").json()["messages"][-1]
+        created = self.client.post("/api/v1/favorites", json={"message_id": self.message_id}).json()
+        for source, original in zip(created["sources"], answer["sources"], strict=True):
+            self.assertEqual(source["score"], original["score"])
+            self.assertEqual(source["matched_tokens"], original["matched_tokens"])
+            self.assertEqual(source["channels"], original["channels"])
+        # 收藏和实时消息同样只出界面认识的键，不该漏出表结构。
+        self.assertEqual(set(created["sources"][0]), set(answer["sources"][0]))
 
     def test_feedback_is_local_upsert_and_favorite_can_be_deleted(self):
         first = self.client.post("/api/v1/feedback", json={

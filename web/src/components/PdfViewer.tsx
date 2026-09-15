@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type SearchHit } from '../api'
+import { api, type SourceRef } from '../api'
 import { SkeletonLines } from './Placeholders'
 
 const HIT_CLASS = 'pdf-hit'
@@ -125,7 +125,7 @@ function PdfCanvas({ pdf, pageNumber, width, aspect, needle, root, onRendered }:
   </div>
 }
 
-export function PdfViewer({ hit }: { hit: SearchHit }) {
+export function PdfViewer({ hit }: { hit: SourceRef }) {
   const scroller = useRef<HTMLDivElement>(null)
   const pending = useRef<number | null>(hit.locator.kind === 'pdf' ? hit.locator.page : 1)
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
