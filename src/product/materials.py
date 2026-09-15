@@ -18,7 +18,10 @@ from .paths import ProductPaths
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_PDF_PAGES = 2000
-MAX_CHUNK_CHARS = 1600
+# E5 的窗口是 512 token，超出的部分会被静默截断。本机笔记语料上实测（739 个
+# 产品片段，字符/token 约 2.23）：1600 字时 18.4% 的片段超窗，1200 字 12.5%，
+# 1000 字 7.3%，800 字 0.9%。取 800：截断基本消失，片段数只多 28%。
+MAX_CHUNK_CHARS = 800
 MAX_NOTEBOOK_CELLS = 5000
 MAX_CELL_OUTPUT_CHARS = 4000
 # 混合检索的候选窗口；接口把 top_k 限死在 20，正好等于这个值。
