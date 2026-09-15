@@ -124,7 +124,16 @@ class ResourceImportBody(BaseModel):
 
 
 def current_settings(database: Database):
-    return {**DEFAULT_SETTINGS, **database.get_settings()}
+    """只暴露可回写的键。
+
+    内部状态（如 active_index_version）也放在 settings 表里，但它属于运行信息、
+    PATCH 会以 extra_forbidden 拒绝；混进来会让设置页整份回写时必然 422。
+    这类键统一走 /api/v1/setup 的 materials 等专门字段。
+    """
+    stored = database.get_settings()
+    return {**DEFAULT_SETTINGS, **{key: stored[key] for key in stored if key in ALLOWED_SETTINGS}}
+
+
 
 
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,

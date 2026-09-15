@@ -61,6 +61,23 @@ class ProductFoundationTests(unittest.TestCase):
         self.assertEqual(self.client.patch("/api/v1/settings", json={
             "ollama_base_url": "http://remote.test:11434"}).status_code, 422)
 
+    def test_settings_can_be_echoed_back_to_patch(self):
+        """设置页把整份 settings 原样回写。
+
+        settings 表里除用户设置外还存着 active_index_version 这类内部记账，
+        一旦它们混进对外暴露的 settings，每次保存都会 422——界面上表现为
+        「保存失败」，而且改哪个字段都没用。
+        """
+        self.client.app.state.database.set_settings({"active_index_version": "idx_fixture"})
+        self.client.patch("/api/v1/settings", json={"display_name": "技术资料"})
+
+        reported = self.client.get("/api/v1/setup").json()["settings"]
+        self.assertNotIn("active_index_version", reported)
+
+        echoed = self.client.patch("/api/v1/settings", json=reported)
+        self.assertEqual(echoed.status_code, 200, echoed.text)
+        self.assertEqual(echoed.json()["settings"], reported)
+
     def test_existing_schema_two_is_backed_up_and_migrated(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         paths = ProductPaths(Path(temporary.name) / "旧版数据").ensure()
