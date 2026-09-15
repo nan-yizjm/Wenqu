@@ -10,6 +10,7 @@ import threading
 import uuid
 
 from ..bm25 import BM25Index, search_bm25
+from . import resources
 from .database import Database, utc_now
 from .paths import ProductPaths
 
@@ -312,6 +313,23 @@ class MaterialService:
         job_id = self._job("upload", {"document_id": document_id})
         self._dispatch(job_id, self._import_upload, document_id, pending)
         return {"document_id": document_id, "job_id": job_id}
+
+    def import_bundled(self, name: str):
+        """把随包示例导入上传资料库；同一份示例重复导入是幂等的。"""
+        path = resources.resolve_bundled("examples", name)
+        if path is None:
+            raise KeyError("随包示例不存在。")
+        data = path.read_bytes()
+        digest = sha256(data).hexdigest()
+        existing = self.database.fetchone("""
+            SELECT d.id, d.checksum FROM documents d JOIN libraries l ON l.id=d.library_id
+            WHERE l.kind='uploads' AND d.display_name=? AND d.removed_at IS NULL
+        """, (name,))
+        if existing and existing["checksum"] == digest:
+            return {"document_id": existing["id"], "job_id": None, "already_imported": True}
+        if existing:
+            self.remove_document(existing["id"])
+        return {**self.upload(name, data), "already_imported": False}
 
     def _start_job(self, job_id: str, total: int):
         with self.database.transaction() as connection:

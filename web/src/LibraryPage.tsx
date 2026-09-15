@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type DocumentItem, type ImportJob, type Library, type SearchHit } from './api'
+import { api, type BundledResource, type DocumentItem, type ImportJob, type Library, type SearchHit } from './api'
 import { SourcePanel } from './SourcePanel'
 
 export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> }) {
   const [libraries, setLibraries] = useState<Library[]>([])
   const [documents, setDocuments] = useState<DocumentItem[]>([])
   const [jobs, setJobs] = useState<ImportJob[]>([])
+  const [examples, setExamples] = useState<BundledResource[]>([])
   const [folder, setFolder] = useState('')
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -13,8 +14,10 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const [message, setMessage] = useState('')
   const uploadInput = useRef<HTMLInputElement>(null)
   const load = async () => {
-    const [libraryData, documentData, jobData] = await Promise.all([api.libraries(), api.documents(), api.jobs()])
+    const [libraryData, documentData, jobData, resourceData] = await Promise.all(
+      [api.libraries(), api.documents(), api.jobs(), api.resources()])
     setLibraries(libraryData.libraries); setDocuments(documentData.documents); setJobs(jobData.jobs)
+    setExamples(resourceData.examples)
     await setupReload()
   }
   useEffect(() => { void load() }, [])
@@ -45,6 +48,11 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
     try { const result = await api.search(query.trim()); setHits(result.results); setMessage(result.results.length ? '' : '没有找到匹配的资料片段。') }
     catch (e) { setMessage(e instanceof Error ? e.message : '搜索失败') }
   }
+  const importExample = async (name: string) => {
+    setMessage(`正在导入 ${name}…`)
+    try { await api.importBundledExample(name); await load(); setMessage(`${name} 已导入，可以直接搜索。`) }
+    catch (e) { setMessage(e instanceof Error ? e.message : '导入示例失败') }
+  }
   const remove = async (document: DocumentItem) => {
     if (!window.confirm(`从工作台移除“${document.display_name}”？原文件不会被删除。`)) return
     await api.removeDocument(document.id); await load(); setHits(hits.filter(hit => hit.document_id !== document.id))
@@ -74,7 +82,14 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
         {hits.map(hit => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}><div><span className="file-type">{hit.media_type === 'pdf' ? 'PDF' : 'MD'}</span><strong>{hit.title}</strong></div>
           <small>{hit.heading_path} · {hit.locator.kind === 'pdf' ? `第 ${hit.locator.page} 页` : `第 ${hit.locator.start_line}–${hit.locator.end_line} 行`}</small><p>{hit.preview}</p></button>)}</section>}
       <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span></div>
-        {documents.length === 0 ? <div className="table-empty">添加第一份资料后，可以在这里查看处理状态和原文版本。</div> :
+        {documents.length === 0 ? <div className="table-empty">
+          <p>添加第一份资料后，可以在这里查看处理状态和原文版本。</p>
+          {examples.length > 0 && <>
+            <p className="hint">不确定从哪开始？先导入随安装包提供的合成示例，它不包含任何个人笔记。</p>
+            <div className="empty-actions">{examples.map(item => <button key={item.name}
+              className="secondary" onClick={() => void importExample(item.name)}>导入随包示例「{item.name}」</button>)}</div>
+          </>}
+        </div> :
           <div className="document-list">{documents.map(document => <div className="document-row" key={document.id}><span className="file-icon">{document.media_type === 'pdf' ? 'PDF' : 'MD'}</span>
             <div><strong>{document.display_name}</strong><small>{document.library_name} / {document.relative_path}</small>{document.error && <em>{document.error}</em>}</div>
             <span className={`status-chip ${document.status}`}>{document.status === 'ready' ? '可搜索' : document.status === 'failed' ? '失败' : document.status === 'processing' ? '处理中' : document.status}</span>

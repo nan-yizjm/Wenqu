@@ -178,7 +178,7 @@ class ChatService:
         return {"stopping": False}
 
     def stream(self, conversation_id, question=None, retry_message_id=None,
-               cancel_event: threading.Event | None = None):
+               cancel_event: threading.Event | None = None, skip_guard=False):
         cancel_event = cancel_event or threading.Event()
         if not self.database.fetchone("SELECT id FROM conversations WHERE id=?", (conversation_id,)):
             raise KeyError("会话不存在。")
@@ -213,12 +213,13 @@ class ChatService:
         retrieval_query = (f"{previous_questions[-1]}\n当前追问：{question}"
                            if needs_reference else question)
         # 能力边界只判断用户原话；内部追问改写中的“当前追问”不是实时请求。
-        reason = static_corpus_rejection_reason(question)
+        # 守卫是启发式，用户可以选择“仍然提问”跳过它。
+        reason = None if skip_guard else static_corpus_rejection_reason(question)
         if reason:
             text = f"当前知识工作台无法处理这个请求：{reason}"
             assistant_id = self._message(conversation_id, "assistant", text,
                 reply_to_message_id=user_message_id, retry_of_message_id=retry_of,
-                retrieval_query=retrieval_query)
+                retrieval_query=retrieval_query, error_code="guard_rejected")
             yield {"type": "final", "message_id": assistant_id, "content": text,
                    "status": "complete", "sources": [], "rejected": True}
             return

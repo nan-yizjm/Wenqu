@@ -56,14 +56,42 @@ try {
         $StreamText -notmatch '"rejected"\s*:\s*true') {
         throw 'The packaged chat endpoint did not return the expected grounded rejection.'
     }
-    Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/system/shutdown" -Method Post | Out-Null
-    if (-not $Process.WaitForExit(10000)) { throw 'Product did not exit within 10 seconds.' }
-    $BundleRoot = Split-Path -Parent $ExecutablePath
     # Windows PowerShell 5.1 reads UTF-8 scripts without a BOM using the local
     # code page. Construct Chinese resource names from code points so this
     # release check behaves identically in Windows PowerShell and PowerShell 7.
     $GuideName = (-join ([char[]](0x7528, 0x6237, 0x6307, 0x5357))) + '.md'
     $WelcomeName = (-join ([char[]](0x6b22, 0x8fce, 0x4f7f, 0x7528))) + '.md'
+    $Resources = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/resources"
+    if ($Resources.docs.Count -lt 1) { throw 'The packaged bundle listed no bundled documents.' }
+    if (-not ($Resources.examples | Where-Object { $_.name -eq $WelcomeName })) {
+        throw 'The packaged bundle did not list the welcome example.'
+    }
+    # Escape the example name to \uXXXX so the request body stays ASCII; Windows
+    # PowerShell 5.1 would otherwise encode the literal Chinese via the local
+    # code page and the server would reject the name.
+    $WelcomeEscaped = -join ($WelcomeName.ToCharArray() | ForEach-Object { '\u' + ([int]$_).ToString('x4') })
+    $Import = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/resources/import" `
+        -Method Post -ContentType 'application/json; charset=utf-8' `
+        -Body ('{"name":"' + $WelcomeEscaped + '"}')
+    if ($Import.already_imported) { throw 'The first import of the bundled example reported already_imported.' }
+    $Indexed = $false
+    for ($Attempt = 0; $Attempt -lt 60; $Attempt++) {
+        $Documents = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/documents"
+        $Example = $Documents.documents | Where-Object { $_.display_name -eq $WelcomeName }
+        if ($Example -and $Example.status -eq 'ready') { $Indexed = $true; break }
+        if ($Example -and $Example.status -eq 'failed') { throw "Bundled example import failed: $($Example.error)" }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $Indexed) { throw 'The bundled example was not searchable within 30 seconds.' }
+    $Search = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/search?q=PagedAttention"
+    if ($Search.results.Count -lt 1) { throw 'Searching PagedAttention found no hit in the bundled example.' }
+    $Reimport = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/resources/import" `
+        -Method Post -ContentType 'application/json; charset=utf-8' `
+        -Body ('{"name":"' + $WelcomeEscaped + '"}')
+    if (-not $Reimport.already_imported) { throw 'Re-importing the same bundled example was not idempotent.' }
+    Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/system/shutdown" -Method Post | Out-Null
+    if (-not $Process.WaitForExit(10000)) { throw 'Product did not exit within 10 seconds.' }
+    $BundleRoot = Split-Path -Parent $ExecutablePath
     foreach ($Relative in @((Join-Path '_internal\resources\docs' $GuideName),
             '_internal\resources\docs\THIRD_PARTY_LICENSES.md',
             (Join-Path '_internal\resources\examples' $WelcomeName))) {

@@ -81,6 +81,22 @@ class ProductChatTests(unittest.TestCase):
         self.assertTrue(events[-1]["rejected"])
         self.assertEqual(self.captured, [])
 
+    def test_guard_rejection_is_marked_and_can_be_overridden(self):
+        question = "今天的推理优化有什么进展？"
+        rejected = self.events({"question": question})
+        self.assertTrue(rejected[-1]["rejected"])
+        message_id = rejected[-1]["message_id"]
+        loaded = self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").json()
+        marked = next(item for item in loaded["messages"] if item["id"] == message_id)
+        self.assertEqual(marked["error_code"], "guard_rejected")
+        self.assertEqual(self.captured, [])
+
+        overridden = self.events({"question": question, "skip_guard": True})
+        self.assertNotIn("rejected", overridden[-1])
+        self.assertEqual(overridden[-1]["status"], "complete")
+        self.assertTrue(self.captured)
+
     def test_unknown_conversation_and_retry_are_rejected_before_streaming(self):
         missing = self.client.post(
             "/api/v1/conversations/not-found/messages/stream", json={"question": "RAG 是什么"})

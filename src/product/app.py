@@ -21,6 +21,7 @@ from .database import Database
 from .paths import ProductPaths, bundle_root
 from .retrieval_model import RetrievalModelManager
 from .materials import MAX_UPLOAD_BYTES, MaterialService
+from .resources import bundled_docs, bundled_examples, resolve_bundled
 from .folder_picker import pick_folder
 from .chat import ChatService
 from .organize import OrganizeService
@@ -91,6 +92,7 @@ class ChatBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str | None = Field(default=None, max_length=4000)
     retry_message_id: str | None = Field(default=None, max_length=100)
+    skip_guard: bool = False
 
 
 class FavoriteBody(BaseModel):
@@ -114,6 +116,11 @@ class FeedbackBody(BaseModel):
 class MigrationRecoveryBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     backup_name: str = Field(min_length=1, max_length=300)
+
+
+class ResourceImportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
 
 
 def current_settings(database: Database):
@@ -289,6 +296,30 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     async def libraries(request: Request):
         return {"libraries": request.app.state.materials.list_libraries()}
 
+    @app.get("/api/v1/resources")
+    async def resources_index():
+        return {"docs": bundled_docs(), "examples": bundled_examples()}
+
+    @app.get("/api/v1/resources/docs/{name}")
+    async def bundled_document(name: str):
+        path = resolve_bundled("docs", name)
+        if path is None:
+            return JSONResponse({"error": "resource_not_found", "message": "随包文档不存在。"},
+                                status_code=404)
+        return FileResponse(path, media_type="text/markdown; charset=utf-8",
+                            filename=path.name, content_disposition_type="inline")
+
+    @app.post("/api/v1/resources/import")
+    async def import_bundled_example(body: ResourceImportBody, request: Request):
+        try:
+            return request.app.state.materials.import_bundled(body.name)
+        except KeyError as error:
+            return JSONResponse({"error": "resource_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_document", "message": str(error)},
+                                status_code=422)
+
     @app.post("/api/v1/system/pick-folder")
     async def system_pick_folder():
         try:
@@ -383,7 +414,7 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                                 status_code=404)
         cancel = threading.Event()
         iterator = request.app.state.chat.stream(
-            conversation_id, body.question, body.retry_message_id, cancel)
+            conversation_id, body.question, body.retry_message_id, cancel, body.skip_guard)
 
         async def events():
             try:

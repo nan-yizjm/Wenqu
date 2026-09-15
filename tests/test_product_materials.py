@@ -128,5 +128,46 @@ class ProductMaterialTests(unittest.TestCase):
         self.assertEqual(failed_again["status"], "failed")
 
 
+    def test_bundled_resources_are_listed_and_served(self):
+        index = self.client.get("/api/v1/resources").json()
+        self.assertIn("欢迎使用.md", [item["name"] for item in index["examples"]])
+        self.assertIn("用户指南.md", [item["name"] for item in index["docs"]])
+
+        guide = self.client.get("/api/v1/resources/docs/用户指南.md")
+        self.assertEqual(guide.status_code, 200)
+        self.assertIn("text/markdown", guide.headers["content-type"])
+
+        for name in ("README.md", "试用反馈台账.md"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.client.get(f"/api/v1/resources/docs/{name}").status_code, 404)
+
+    def test_bundled_example_import_is_idempotent_and_searchable(self):
+        first = self.client.post("/api/v1/resources/import", json={"name": "欢迎使用.md"})
+        self.assertEqual(first.status_code, 200)
+        self.assertFalse(first.json()["already_imported"])
+
+        documents = self.client.get("/api/v1/documents").json()["documents"]
+        imported = [item for item in documents if item["display_name"] == "欢迎使用.md"]
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(imported[0]["status"], "ready")
+
+        hits = self.client.get("/api/v1/search", params={"q": "PagedAttention"}).json()
+        self.assertTrue(hits["results"])
+        self.assertEqual(hits["results"][0]["title"], "欢迎使用.md")
+
+        again = self.client.post("/api/v1/resources/import", json={"name": "欢迎使用.md"})
+        self.assertTrue(again.json()["already_imported"])
+        self.assertEqual(again.json()["document_id"], imported[0]["id"])
+        self.assertEqual(len(self.client.get(
+            "/api/v1/documents").json()["documents"]), 1)
+
+    def test_unknown_bundled_resource_is_rejected(self):
+        missing = self.client.post("/api/v1/resources/import", json={"name": "不存在.md"})
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(self.client.get(
+            "/api/v1/documents").json()["documents"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

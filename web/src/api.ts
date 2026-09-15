@@ -26,12 +26,25 @@ export type ImportJob = { id: string; job_type: string; status: string; total: n
 export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; heading_path: string; locator: { kind: 'markdown'; start_line: number; end_line: number } | { kind: 'pdf'; page: number }; preview: string; score: number; matched_tokens: string[] }
 export type SourceContent = { document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; text: string }
 export type MessageSource = Omit<SearchHit, 'score' | 'matched_tokens'> & { label: string; position?: number }
-export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; sources: MessageSource[] }
+export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[] }
 export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }
 export type FavoriteSummary = { id: string; message_id: string; title: string; note: string; question: string; answer: string; provider: string | null; model: string | null; index_version: string | null; generated_at: string | null; updated_at: string; source_count: number }
 export type Favorite = FavoriteSummary & { sources: MessageSource[] }
 export type FeedbackKind = 'helpful' | 'missing' | 'citation_wrong' | 'answer_wrong'
-export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; provider?: string; model?: string; message?: string; citation_warning?: boolean }
+export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; provider?: string; model?: string; message?: string; citation_warning?: boolean; rejected?: boolean }
+
+export type BundledResource = { name: string; size: number; modified_at: string }
+export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResource[] }
+export type Diagnostics = {
+  product_version: string
+  python: string
+  frozen: boolean
+  database_schema: number
+  data_directories: { root_exists: boolean; database_exists: boolean; model_cache_exists: boolean }
+  credentials: { deepseek_configured: boolean }
+  runtime: { status: string; detail: string | null }
+  retrieval_model: RetrievalModelState
+}
 
 export type RetrievalModelState = {
   status: 'not_downloaded' | 'downloading' | 'loading' | 'verifying' | 'ready' | 'failed'
@@ -60,7 +73,11 @@ export const api = {
     '/api/v1/settings', { method: 'PATCH', body: JSON.stringify(values) }),
   saveDeepSeek: (apiKey: string) => request<{ configured: boolean }>(
     '/api/v1/credentials/deepseek', { method: 'PUT', body: JSON.stringify({ api_key: apiKey }) }),
-  diagnostics: () => request<Record<string, unknown>>('/api/v1/system/diagnostics'),
+  diagnostics: () => request<Diagnostics>('/api/v1/system/diagnostics'),
+  resources: () => request<ResourcesIndex>('/api/v1/resources'),
+  importBundledExample: (name: string) => request<{ document_id: string; job_id: string | null; already_imported: boolean }>(
+    '/api/v1/resources/import', { method: 'POST', body: JSON.stringify({ name }) }),
+  bundledDocUrl: (name: string) => `/api/v1/resources/docs/${encodeURIComponent(name)}`,
   prepareRetrievalModel: () => request<RetrievalModelState>(
     '/api/v1/setup/retrieval-model', { method: 'POST' }),
   retrievalModelStatus: () => request<RetrievalModelState>('/api/v1/setup/retrieval-model'),
@@ -88,7 +105,7 @@ export const api = {
   conversation: (id: string) => request<Conversation>(`/api/v1/conversations/${id}`),
   streamMessage: async (
     conversationId: string,
-    body: { question?: string; retry_message_id?: string },
+    body: { question?: string; retry_message_id?: string; skip_guard?: boolean },
     onEvent: (event: StreamEvent) => void,
     signal: AbortSignal,
   ) => {

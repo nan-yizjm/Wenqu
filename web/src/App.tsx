@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type ProductSettings, type SetupState } from './api'
+import { api, type Diagnostics, type ProductSettings, type ResourcesIndex, type SetupState } from './api'
 import { LibraryPage } from './LibraryPage'
 import { ChatPage } from './ChatPage'
 import { FavoritesPage } from './FavoritesPage'
@@ -12,27 +12,21 @@ const nav: { id: Page; icon: string; label: string }[] = [
   { id: 'settings', icon: '⚙', label: '设置' },
 ]
 
-function EmptyPage({ page, goSettings }: { page: Page; goSettings: () => void }) {
-  const content = {
-    library: ['你的资料库还是空的', '连接 Markdown 文件夹或添加 PDF，建立第一个可引用的知识库。', '添加资料'],
-    chat: ['从自己的资料中找到答案', '资料准备完成后，可以提问、追问，并打开每条结论背后的原文。', '前往设置'],
-    favorites: ['把值得保留的结论放在这里', '收藏回答后，可以补充备注并导出为 Markdown。', '了解工作流'],
-    settings: ['', '', ''],
-  }[page]
-  return <section className="empty-state">
-    <div className="empty-glyph">{page === 'library' ? '▥' : page === 'chat' ? '✦' : '☆'}</div>
-    <h2>{content[0]}</h2><p>{content[1]}</p>
-    <button className="primary" onClick={goSettings}>{content[2]}</button>
-  </section>
-}
-
 function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<void> }) {
   const [form, setForm] = useState<ProductSettings>(setup.settings)
   const [key, setKey] = useState('')
   const [message, setMessage] = useState('')
   const [modelState, setModelState] = useState(setup.retrieval_model)
   const [restartRequired, setRestartRequired] = useState(false)
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+  const [resources, setResources] = useState<ResourcesIndex>({ docs: [], examples: [] })
   const restoreInput = useRef<HTMLInputElement>(null)
+  useEffect(() => { void (async () => {
+    try {
+      const [reported, index] = await Promise.all([api.diagnostics(), api.resources()])
+      setDiagnostics(reported); setResources(index)
+    } catch { setDiagnostics(null) }
+  })() }, [])
   const save = async () => {
     setMessage('正在保存…')
     try {
@@ -75,7 +69,7 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
   }
   return <div className="settings-page">
     <header className="page-heading"><div><span className="eyebrow">WORKSPACE SETTINGS</span><h1>设置</h1>
-      <p>配置工作台名称和生成模型。资料与检索模型将在下一步接入。</p></div></header>
+      <p>配置工作台名称、生成模型与检索方式；资料在「资料库」页管理。</p></div></header>
     <div className="settings-grid">
       <section className="card"><h3>工作台</h3><label>显示名称<input value={form.display_name}
         onChange={e => setForm({ ...form, display_name: e.target.value })} /></label>
@@ -91,9 +85,25 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
       <p className="hint">选择 DeepSeek 后，问题与用于回答的资料片段会发送到该服务。</p></section>
       <section className="card"><h3>检索模型</h3><div className="status-line"><span className={`dot ${modelState.status === 'ready' ? 'green' : 'amber'}`} />
         {modelState.status === 'ready' ? 'multilingual-e5-small 已准备' : modelState.detail || '尚未下载'}</div>
-        <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。</p>
+        <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。当前问答使用 BM25 关键词检索，准备与否都不影响现在的搜索结果；语义召回会在后续版本启用后使用它。</p>
         {modelState.status !== 'ready' && !['downloading', 'loading', 'verifying'].includes(modelState.status) &&
           <button className="secondary" onClick={prepareModel}>下载并验证模型</button>}</section>
+      <section className="card"><h3>随包文档</h3>
+        <p className="hint">这些文件随安装包提供，与本机资料分开保管，不会被检索。</p>
+        <div className="support-actions">{resources.docs.map(item => <a key={item.name}
+          className="secondary export-link" href={api.bundledDocUrl(item.name)}
+          target="_blank" rel="noreferrer">{item.name.replace(/\.md$/, '')}</a>)}
+          {!resources.docs.length && <span className="hint">未找到随包文档。</span>}</div></section>
+      <section className="card"><h3>运行状态</h3>
+        {diagnostics ? <>
+          <div className="status-row"><span>产品版本</span><code>{diagnostics.product_version}</code></div>
+          <div className="status-row"><span>数据库结构</span><code>v{diagnostics.database_schema}</code></div>
+          <div className="status-row"><span>运行方式</span><code>{diagnostics.frozen ? '安装版' : '源码运行'}</code></div>
+          <div className="status-line"><span className={`dot ${diagnostics.data_directories.database_exists ? 'green' : 'amber'}`} />
+            {diagnostics.data_directories.database_exists ? '用户数据目录可读写' : '用户数据目录不完整'}</div>
+          <div className="status-line"><span className={`dot ${diagnostics.retrieval_model.status === 'ready' ? 'green' : 'amber'}`} />
+            {diagnostics.retrieval_model.status === 'ready' ? '检索模型已就绪' : '检索模型尚未准备'}</div>
+        </> : <p className="hint">无法读取运行状态；本地服务可能刚刚启动。</p>}</section>
       <section className="card"><h3>备份、恢复与诊断</h3><p className="hint">备份包含资料快照、会话、收藏和导出，不包含模型缓存或密钥。恢复前会先保存当前数据。</p>
         <div className="support-actions"><button className="secondary" onClick={() => void backup()}>下载数据备份</button><button className="secondary" onClick={() => restoreInput.current?.click()}>从备份恢复</button>
           <a className="secondary export-link" href={api.diagnosticExportUrl()}>下载脱敏诊断</a></div>
@@ -161,7 +171,8 @@ export default function App() {
   return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">OR</div><div><strong>{setup.settings.display_name}</strong><span>个人知识工作台</span></div></div>
     <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
     <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div></aside>
-    <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} /> : page === 'library' ?
-      <LibraryPage setupReload={reload} /> : page === 'chat' ? <ChatPage /> : page === 'favorites' ? <FavoritesPage /> : <><header className="topbar"><span>{nav.find(n => n.id === page)?.label}</span><button className="ghost" onClick={() => setPage('settings')}>运行状态</button></header><EmptyPage page={page} goSettings={() => setPage('settings')} /></>}</main>
+    <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} />
+      : page === 'library' ? <LibraryPage setupReload={reload} />
+      : page === 'chat' ? <ChatPage /> : <FavoritesPage />}</main>
   </div>
 }
