@@ -1,18 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type SearchHit, type StreamEvent } from './api'
 import { SourcePanel } from './SourcePanel'
+import { AnswerMarkdown } from './components/AnswerMarkdown'
 
 function hitFromSource(source: MessageSource): SearchHit {
   return { ...source, score: 0, matched_tokens: [] }
-}
-
-function AnswerText({ message, open }: { message: ChatMessage; open: (source: MessageSource) => void }) {
-  const sourceByLabel = new Map(message.sources.map(source => [source.label, source]))
-  return <div className="answer-text">{message.content.split(/(\[S\d+\])/).map((part, index) => {
-    const source = sourceByLabel.get(part.slice(1, -1))
-    return source ? <button key={index} className="citation" onClick={() => open(source)}>{part}</button>
-      : <span key={index}>{part}</span>
-  })}</div>
 }
 
 const FEEDBACK_KINDS: { kind: FeedbackKind; label: string; hint: string }[] = [
@@ -147,7 +139,9 @@ export function ChatPage() {
       <div className="message-list">{!active?.messages?.length && <div className="chat-empty"><div>✦</div><h2>从自己的资料开始提问</h2><p>答案中的引用可以直接打开当时使用的原文快照。</p></div>}
         {active?.messages?.map(item => <article key={item.id} className={`message ${item.role} ${item.status}`}>
           <div className="message-label">{item.role === 'user' ? '你' : '知识工作台'}{item.status === 'stopped' ? ' · 未完成' : item.status === 'failed' ? ' · 失败' : ''}</div>
-          {item.role === 'assistant' ? <AnswerText message={item} open={setSelected} /> : <div className="question-text">{item.content}</div>}
+          {item.role === 'user' ? <div className="question-text">{item.content}</div>
+            : item.status === 'streaming' ? <div className="answer-text">{item.content}</div>
+            : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}
           {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">{item.sources.map(source => <button key={source.label} onClick={() => setSelected(source)}><b>{source.label}</b>{source.title}</button>)}</div>}
           {item.role === 'assistant' && item.status === 'complete' && item.error_code !== 'guard_rejected' && <div className="answer-actions">
             {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}
