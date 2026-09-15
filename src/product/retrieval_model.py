@@ -110,3 +110,16 @@ class MemoryRetrievalModelManager:
         self._state.update(status="ready", dimension=384, device="cpu",
                            detail="测试模型验证通过", updated_at=_now())
         return self.status()
+
+
+def build_cpu_encoder(cache_dir: Path):
+    """用本机缓存里的固定快照装一个 CPU 编码器，供向量索引使用。
+
+    只读本地文件：产品承诺不因为检索而联网。
+    """
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(
+        MODEL_NAME, revision=MODEL_REVISION, device="cpu",
+        cache_folder=str(cache_dir), local_files_only=True,
+    )

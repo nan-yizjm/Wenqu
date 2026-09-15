@@ -9,7 +9,8 @@ import re
 import threading
 import uuid
 
-from ..bm25 import BM25Index, search_bm25
+from ..bm25 import BM25Index
+from ..hybrid_retrieve import RetrievalEngine
 from . import resources
 from .database import Database, utc_now
 from .paths import ProductPaths
@@ -20,6 +21,9 @@ MAX_PDF_PAGES = 2000
 MAX_CHUNK_CHARS = 1600
 MAX_NOTEBOOK_CELLS = 5000
 MAX_CELL_OUTPUT_CHARS = 4000
+# 混合检索的候选窗口；接口把 top_k 限死在 20，正好等于这个值。
+CANDIDATE_K = 20
+RRF_K = 60
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 MEDIA_TYPES = {".md": "markdown", ".markdown": "markdown", ".pdf": "pdf", ".ipynb": "notebook"}
 
@@ -241,14 +245,25 @@ class SearchSnapshot:
     version_id: str | None
     chunks: tuple[dict, ...]
     index: BM25Index
+    engine: RetrievalEngine
 
 
 class MaterialService:
-    def __init__(self, database: Database, paths: ProductPaths, run_inline=False):
+    def __init__(self, database: Database, paths: ProductPaths, run_inline=False,
+                 settings_getter=None, encoder_factory=None, model_ready=None):
         self.database, self.paths = database, paths
         self.run_inline = run_inline
+        self._settings_getter = settings_getter or (lambda: {})
+        # 返回已加载的编码器；只允许在后台任务线程里调用，模型没准备好会返回 None。
+        self._encoder_factory = encoder_factory
+        # 便宜的就绪判断，不加载模型，可以在请求线程上调用。
+        self._model_ready = model_ready or (lambda: True)
+        self._encoder = None
         self._snapshot_lock = threading.RLock()
+        self._vector_lock = threading.RLock()
         self._write_lock = threading.RLock()
+        self._vector_ready: tuple[str, object] | None = None
+        self._vector_building: str | None = None
         self._recover_interrupted_jobs()
         self._snapshot = self._load_snapshot()
 
@@ -284,7 +299,18 @@ class MaterialService:
             "locator": json.loads(row["locator_json"]), "text": row["text"],
         } for row in rows)
         active = self.database.get_settings().get("active_index_version")
-        return SearchSnapshot(active, chunks, BM25Index(list(chunks)))
+        engine = self._build_engine(active, list(chunks))
+        return SearchSnapshot(active, chunks, engine.bm25, engine)
+
+    def _vector_cache_path(self, version_id: str) -> Path:
+        return self.paths.indexes / version_id / "vector_index.npz"
+
+    def _build_engine(self, version_id: str | None, chunks: list[dict]):
+        """每个索引版本一个引擎；向量索引随后台任务挂上去，挂之前只走 BM25。"""
+        return RetrievalEngine(
+            chunks, device="cpu", candidate_k=CANDIDATE_K, rrf_k=RRF_K,
+            cache_path=self._vector_cache_path(version_id) if version_id else None,
+        )
 
     def _publish_snapshot(self):
         rows = self.database.fetchall("""
@@ -312,10 +338,104 @@ class MaterialService:
                 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
                     updated_at=excluded.updated_at
             """, (json.dumps(version_id), utc_now()))
-        prepared = SearchSnapshot(version_id, tuple(chunks), BM25Index(chunks))
+        engine = self._build_engine(version_id, chunks)
+        prepared = SearchSnapshot(version_id, tuple(chunks), engine.bm25, engine)
         with self._snapshot_lock:
             self._snapshot = prepared
+        # 上一版的向量索引故意留着：它已经不是"当前版本"，`retrieve()` 靠版本号
+        # 判断会直接忽略它，但它是增量复用的唯一来源，清掉就等于整库重编码。
+        self.ensure_vector_index()
         return prepared
+
+    def _encoder_instance(self):
+        """只在后台任务线程里调用：这里可能会加载模型。"""
+        if self._encoder is None and self._encoder_factory is not None:
+            self._encoder = self._encoder_factory()
+        return self._encoder
+
+    def _vector_state(self, snapshot: SearchSnapshot | None = None):
+        with self._vector_lock:
+            ready, building = self._vector_ready, self._vector_building
+        if snapshot is None:
+            with self._snapshot_lock:
+                snapshot = self._snapshot
+        current = snapshot.version_id
+        if ready is not None and ready[0] == current:
+            return {"status": "ready", "version_id": current}
+        if building is not None and building == current:
+            return {"status": "building", "version_id": current}
+        return {"status": "off", "version_id": current}
+
+    def ensure_vector_index(self):
+        """按需为当前版本排一个向量索引任务；已经有或正在建就什么都不做。"""
+        with self._snapshot_lock:
+            snapshot = self._snapshot
+        if not snapshot.chunks or snapshot.version_id is None:
+            return None
+        if self._settings_getter().get("retrieval_mode") != "hybrid":
+            return None
+        if self._encoder_factory is None or not self._model_ready():
+            return None
+        with self._vector_lock:
+            ready = self._vector_ready
+            if (ready is not None and ready[0] == snapshot.version_id) \
+                    or self._vector_building == snapshot.version_id:
+                return None
+        with self._vector_lock:
+            self._vector_building = snapshot.version_id
+        job_id = self._job("build_vector_index", {
+            "version_id": snapshot.version_id, "chunks": len(snapshot.chunks)})
+        self._dispatch(job_id, self._build_vector_index, snapshot.version_id)
+        return job_id
+
+    def _build_vector_index(self, job_id: str, version_id: str):
+        from ..vector_retrieve import VectorIndex
+
+        try:
+            self._start_job(job_id, 1)
+            with self._snapshot_lock:
+                snapshot = self._snapshot
+            if snapshot.version_id != version_id:
+                raise ValueError("资料在建立向量索引期间发生了变化，这一版已作废。")
+            encoder = self._encoder_instance()
+            if encoder is None:
+                raise ValueError("检索模型尚未准备完成，请先在设置页准备检索模型。")
+            chunks = list(snapshot.chunks)
+            index = VectorIndex(
+                chunks, device="cpu", encoder=encoder,
+                cache_path=self._vector_cache_path(version_id),
+                reuse_from=self._previous_vector_index(),
+            )
+            with self._snapshot_lock:
+                current = self._snapshot
+            if current.version_id == version_id:
+                current.engine.vector = index
+                with self._vector_lock:
+                    self._vector_ready = (version_id, index)
+            self._advance_job(job_id)
+            self._finish_job(job_id)
+        finally:
+            # 失败也要放开，否则这个版本再也不会重试。
+            with self._vector_lock:
+                if self._vector_building == version_id:
+                    self._vector_building = None
+
+    def _previous_vector_index(self):
+        """给增量复用找一个旧缓存：内存里那一份就是上一版。
+
+        索引版本号是 `index_versions` 的主键，`document_chunks.version_id` 指的
+        却是文档版本——两个号不在同一个空间里，所以没有"这一版索引当初用了哪些
+        片段"的持久记录，重启后就反查不出来。重启情况下要么整库指纹没变、缓存
+        直接命中，要么就老老实实重新编码一遍。
+        """
+        with self._vector_lock:
+            previous = self._vector_ready
+        if previous is None:
+            return None
+        _, index = previous
+        if index.cache_path is None or not Path(index.cache_path).is_file():
+            return None
+        return index.chunks, index.cache_path
 
     def setup_summary(self):
         row = self.database.fetchone("""
@@ -326,7 +446,8 @@ class MaterialService:
         with self._snapshot_lock:
             snapshot = self._snapshot
         return {"total_documents": int(row["total"] or 0), "ready_documents": int(row["ready"] or 0),
-                "chunk_count": len(snapshot.chunks), "index_version": snapshot.version_id}
+                "chunk_count": len(snapshot.chunks), "index_version": snapshot.version_id,
+                "vector_index": self._vector_state(snapshot)}
 
     def list_libraries(self):
         rows = self.database.fetchall("""
@@ -638,18 +759,35 @@ class MaterialService:
         return {"job_id": job_id}
 
     def retrieve(self, query: str, top_k=8):
-        """返回本次不可变快照上的完整检索片段，供搜索页和问答共同使用。"""
+        """返回本次不可变快照上的完整检索片段，供搜索页和问答共同使用。
+
+        混合检索要求当前版本的向量索引已经建好；没建好就退回 BM25，并把
+        实际用的方式报给界面，而不是让用户以为开了却什么都没变。
+        """
         with self._snapshot_lock:
             snapshot = self._snapshot
-        results = search_bm25(query, list(snapshot.chunks), snapshot.index, top_k=top_k)
-        return {"query": query, "index_version": snapshot.version_id, "results": [{
-            "chunk_id": chunk["id"], "document_id": chunk["document_id"],
-            "version_id": chunk["version_id"], "title": chunk["document_title"],
-            "media_type": chunk["media_type"], "heading_path": chunk["heading_path"],
-            "locator": chunk["locator"], "preview": chunk["text"][:360],
-            "text": chunk["text"],
-            "score": round(score, 4), "matched_tokens": sorted(tokens),
-        } for chunk, score, tokens in results]}
+        requested = self._settings_getter().get("retrieval_mode", "bm25")
+        with self._vector_lock:
+            ready = self._vector_ready
+        hybrid = requested == "hybrid" and ready is not None and ready[0] == snapshot.version_id
+        hits = snapshot.engine.search(
+            query, method="hybrid" if hybrid else "bm25", top_k=top_k)
+        return {
+            "query": query, "index_version": snapshot.version_id,
+            "retrieval_mode": requested, "effective_mode": "hybrid" if hybrid else "bm25",
+            "results": [{
+                "chunk_id": hit.chunk["id"], "document_id": hit.chunk["document_id"],
+                "version_id": hit.chunk["version_id"], "title": hit.chunk["document_title"],
+                "media_type": hit.chunk["media_type"], "heading_path": hit.chunk["heading_path"],
+                "locator": hit.chunk["locator"], "preview": hit.chunk["text"][:360],
+                "text": hit.chunk["text"],
+                "score": round(hit.score, 6), "matched_tokens": sorted(hit.matched_tokens),
+                "channels": dict(hit.ranks),
+                "channel_scores": {name: round(value, 6)
+                                   for name, value in hit.channel_scores.items()},
+                "quality_reason": hit.quality_reason,
+            } for hit in hits],
+        }
 
     def search(self, query: str, top_k=8):
         result = self.retrieve(query, top_k)

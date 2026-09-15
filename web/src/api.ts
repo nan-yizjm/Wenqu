@@ -11,13 +11,14 @@ export type ProductSettings = {
   theme: 'system' | 'light' | 'dark'
 }
 
+export type VectorIndexState = { status: 'ready' | 'building' | 'off'; version_id: string | null }
 export type SetupState = {
   settings: ProductSettings
   deepseek_key_configured: boolean
   data_root: string
   steps: Record<string, boolean>
   retrieval_model: RetrievalModelState
-  materials: { total_documents: number; ready_documents: number; chunk_count: number; index_version: string | null }
+  materials: { total_documents: number; ready_documents: number; chunk_count: number; index_version: string | null; vector_index: VectorIndexState }
   recovery_required?: boolean
   migration_error?: string
   recovery_backups?: { name: string; size: number; modified_at: string }[]
@@ -32,7 +33,8 @@ export type Locator =
 export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
 export type DocumentItem = { id: string; library_id: string; relative_path: string; display_name: string; media_type: MediaType; status: string; error: string | null; current_version_id: string | null; updated_at: string; library_name: string }
 export type ImportJob = { id: string; job_type: string; status: string; total: number; completed: number; failed: number; message: string | null }
-export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: MediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[] }
+export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: MediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[]; channels?: Record<string, number>; channel_scores?: Record<string, number>; quality_reason?: string | null }
+export type SearchResult = { query: string; index_version: string | null; retrieval_mode: 'bm25' | 'hybrid'; effective_mode: 'bm25' | 'hybrid'; results: SearchHit[] }
 export type SourceContent = { document_id: string; version_id: string; title: string; media_type: MediaType; text: string }
 export type MessageSource = Omit<SearchHit, 'score' | 'matched_tokens'> & { label: string; position?: number }
 export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[] }
@@ -107,7 +109,7 @@ export const api = {
     '/api/v1/documents/upload', { method: 'POST', body }) },
   removeDocument: (id: string) => request<{ removed: boolean }>(`/api/v1/documents/${id}`, { method: 'DELETE' }),
   retryDocument: (id: string) => request<{ job_id: string }>(`/api/v1/documents/${id}/retry`, { method: 'POST' }),
-  search: (query: string) => request<{ query: string; index_version: string | null; results: SearchHit[] }>(
+  search: (query: string) => request<SearchResult>(
     `/api/v1/search?q=${encodeURIComponent(query)}`),
   source: (documentId: string, versionId: string) => request<SourceContent>(
     `/api/v1/documents/${documentId}/versions/${versionId}/source`),

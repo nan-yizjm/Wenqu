@@ -68,6 +68,15 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
     catch (error) { setMessage(error instanceof Error ? error.message : '恢复失败') }
     if (restoreInput.current) restoreInput.current.value = ''
   }
+  // 混合检索只有在语义索引建好之后才真的生效，否则搜索会悄悄退回关键词检索。
+  // 这里把实际状态说出来，省得用户以为"开了却没效果"。
+  const vector = setup.materials.vector_index
+  const vectorText = form.retrieval_mode === 'bm25' ? '当前按词面匹配，不做语义召回。'
+    : vector.status === 'ready' ? '语义索引已就绪，搜索同时使用关键词与语义。'
+    : vector.status === 'building' ? '正在后台建立语义索引，完成前仍按关键词检索。'
+    : modelState.status === 'ready' ? '语义索引尚未建立，保存设置后开始；建立期间仍按关键词检索。'
+    : '还没有准备检索模型，混合检索暂时按关键词检索。'
+  const vectorTone = form.retrieval_mode === 'bm25' ? '' : vector.status === 'ready' ? 'green' : 'amber'
   return <div className="settings-page">
     <header className="page-heading"><div><span className="eyebrow">WORKSPACE SETTINGS</span><h1>设置</h1>
       <p>配置工作台名称、生成模型与检索方式；资料在「资料库」页管理。</p></div></header>
@@ -88,9 +97,17 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
         <label>模型名称<input value={form.ollama_model} onChange={e => setForm({ ...form, ollama_model: e.target.value })} /></label>
       </> : <label>API Key<input type="password" value={key} placeholder={setup.deepseek_key_configured ? '已安全保存；留空则不修改' : '输入 DeepSeek API Key'} onChange={e => setKey(e.target.value)} /></label>}
       <p className="hint">选择 DeepSeek 后，问题与用于回答的资料片段会发送到该服务。</p></section>
+      <section className="card"><h3>检索方式</h3><div className="segmented">
+        <button className={form.retrieval_mode === 'bm25' ? 'active' : ''}
+          onClick={() => setForm({ ...form, retrieval_mode: 'bm25' })}>关键词检索</button>
+        <button className={form.retrieval_mode === 'hybrid' ? 'active' : ''}
+          onClick={() => setForm({ ...form, retrieval_mode: 'hybrid' })}>混合检索</button>
+      </div>
+        <p className="hint">关键词检索按词面匹配，改个说法就可能搜不到。混合检索会把语义相近的片段也召回，代价是先在后台把全部片段编码一遍，长资料首次需要几分钟。</p>
+        <div className="status-line"><span className={`dot ${vectorTone}`} />{vectorText}</div></section>
       <section className="card"><h3>检索模型</h3><div className="status-line"><span className={`dot ${modelState.status === 'ready' ? 'green' : 'amber'}`} />
         {modelState.status === 'ready' ? 'multilingual-e5-small 已准备' : modelState.detail || '尚未下载'}</div>
-        <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。当前问答使用 BM25 关键词检索，准备与否都不影响现在的搜索结果；语义召回会在后续版本启用后使用它。</p>
+        <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。混合检索依赖它；只开关键词检索的话不准备也不影响搜索。</p>
         {modelState.status !== 'ready' && !['downloading', 'loading', 'verifying'].includes(modelState.status) &&
           <button className="secondary" onClick={prepareModel}>下载并验证模型</button>}</section>
       <section className="card"><h3>随包文档</h3>

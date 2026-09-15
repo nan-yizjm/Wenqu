@@ -19,7 +19,7 @@ from . import PRODUCT_NAME, PRODUCT_VERSION
 from .credentials import CredentialStore
 from .database import Database
 from .paths import ProductPaths, bundle_root
-from .retrieval_model import RetrievalModelManager
+from .retrieval_model import RetrievalModelManager, build_cpu_encoder
 from .materials import MAX_UPLOAD_BYTES, MaterialService
 from .resources import bundled_docs, bundled_examples, resolve_bundled
 from .folder_picker import pick_folder
@@ -150,10 +150,20 @@ def current_settings(database: Database):
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                        static_dir: Path | None = None, shutdown_callback=None,
                        retrieval_model_manager=None, material_run_inline=False,
-                       chat_client_factory=None):
+                       chat_client_factory=None, material_encoder_factory=None):
     paths = (paths or ProductPaths.default()).ensure()
     credentials = credential_store or CredentialStore()
     model_manager = retrieval_model_manager or RetrievalModelManager(paths.model_cache)
+
+    def model_ready():
+        """便宜的就绪判断：只读状态文件，不加载模型。"""
+        return model_manager.status().get("status") == "ready"
+
+    def encoder_factory():
+        """在后台任务线程里加载编码器；这里绝不触发下载。"""
+        if material_encoder_factory is not None:
+            return material_encoder_factory()
+        return build_cpu_encoder(paths.model_cache)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -169,7 +179,10 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             app.state.materials = app.state.chat = app.state.organize = app.state.support = None
         else:
             app.state.materials = MaterialService(
-                app.state.database, paths, run_inline=material_run_inline)
+                app.state.database, paths, run_inline=material_run_inline,
+                settings_getter=lambda: current_settings(app.state.database),
+                encoder_factory=encoder_factory, model_ready=model_ready)
+            app.state.materials.ensure_vector_index()
             app.state.chat = ChatService(
                 app.state.database, app.state.materials, credentials,
                 lambda: current_settings(app.state.database), chat_client_factory)
@@ -277,6 +290,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
 
     @app.get("/api/v1/setup/retrieval-model")
     async def retrieval_model_status(request: Request):
+        # 模型刚准备好时补建向量索引；已经建好或不是混合模式就什么都不做。
+        request.app.state.materials.ensure_vector_index()
         return request.app.state.retrieval_model.status()
 
     @app.post("/api/v1/setup/retrieval-model")
@@ -298,6 +313,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "unknown_setting"}, status_code=422)
         request.app.state.database.set_settings(values)
         request.app.state.database.event("settings_updated", {"keys": sorted(values)})
+        # 切到混合检索时补建向量索引；其余情况这里什么都不做。
+        request.app.state.materials.ensure_vector_index()
         return {"settings": current_settings(request.app.state.database)}
 
     @app.put("/api/v1/credentials/deepseek")

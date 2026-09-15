@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type BundledResource, type DocumentItem, type ImportJob, type Library, type SearchHit } from './api'
+import { api, type BundledResource, type DocumentItem, type ImportJob, type Library, type SearchHit, type SearchResult } from './api'
 import { locatorLabel, mediaLabel } from './lib/locator'
 import { SourcePanel } from './SourcePanel'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
@@ -12,6 +12,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const [folder, setFolder] = useState('')
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
+  const [searched, setSearched] = useState<SearchResult | null>(null)
   const [selected, setSelected] = useState<SearchHit | null>(null)
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -35,7 +36,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   }
   const connect = async () => {
     if (!folder.trim()) return
-    setMessage('正在扫描 Markdown 文件…')
+    setMessage('正在扫描 Markdown、PDF 与 Notebook 文件…')
     try { await api.connectFolder(folder.trim()); setFolder(''); await load() }
     catch (e) { setMessage(e instanceof Error ? e.message : '连接失败') }
   }
@@ -48,8 +49,11 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   }
   const search = async () => {
     if (!query.trim()) return
-    try { const result = await api.search(query.trim()); setHits(result.results); setMessage(result.results.length ? '' : '没有找到匹配的资料片段。') }
-    catch (e) { setMessage(e instanceof Error ? e.message : '搜索失败') }
+    try {
+      const result = await api.search(query.trim())
+      setHits(result.results); setSearched(result)
+      setMessage(result.results.length ? '' : '没有找到匹配的资料片段。')
+    } catch (e) { setMessage(e instanceof Error ? e.message : '搜索失败') }
   }
   const importExample = async (name: string) => {
     setMessage(`正在导入 ${name}…`)
@@ -81,7 +85,9 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
           <button className="ghost" onClick={async () => { await api.refreshLibrary(library.id); setMessage(`正在刷新 ${library.name}…`); await load() }}>刷新</button></div>)}</div>}
       <section className="search-box"><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void search() }} placeholder="搜索你的全部资料，例如：PagedAttention 解决什么问题？" />
         <button className="primary" onClick={search}>搜索</button></section>
-      {hits.length > 0 && <section className="search-results"><div className="section-title"><h2>搜索结果</h2><span>{hits.length} 个片段</span></div>
+      {hits.length > 0 && <section className="search-results"><div className="section-title"><h2>搜索结果</h2><span>{hits.length} 个片段 · {searched?.effective_mode === 'hybrid' ? '关键词 + 语义' : '关键词'}</span></div>
+        {searched && searched.effective_mode !== searched.retrieval_mode &&
+          <p className="hint">设置里选的是混合检索，但语义索引还没建好，这次仍按关键词检索。</p>}
         {hits.map(hit => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}><div><span className="file-type">{mediaLabel(hit.media_type)}</span><strong>{hit.title}</strong></div>
           <small>{hit.heading_path} · {locatorLabel(hit.locator)}</small><p>{hit.preview}</p></button>)}</section>}
       <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span></div>

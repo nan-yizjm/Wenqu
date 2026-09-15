@@ -234,7 +234,11 @@ class ChatService:
             provider=provider, model=model, index_version=retrieval["index_version"],
             retrieval_query=retrieval_query)
         self._sources(assistant_id, results)
-        public_sources = [{k: v for k, v in item.items() if k not in {"text", "score", "matched_tokens"}}
+        # 排除的是"没有落库的那部分"：message_sources 只存列出的字段，若让它们
+        # 一起出网，实时消息会带上重放后消失的键，前端就得处理两种形状。
+        public_sources = [{k: v for k, v in item.items()
+                           if k not in {"text", "score", "matched_tokens", "channels",
+                                        "channel_scores", "quality_reason"}}
                           | {"label": f"S{number}"} for number, item in enumerate(results, 1)]
         yield {"type": "retrieval", "message_id": assistant_id,
                "query": retrieval_query, "index_version": retrieval["index_version"],

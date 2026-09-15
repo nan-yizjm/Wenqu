@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from src.bm25 import search_bm25
 from src.hybrid_retrieve import RetrievalEngine, fuse_rankings
 from src.context import build_context
 from src.answer import has_separate_concept_coverage
@@ -13,6 +14,30 @@ def chunk(identifier, heading="原理"):
 
 
 class HybridTests(unittest.TestCase):
+    def test_bm25_only_path_still_equals_search_bm25(self):
+        """产品只剩 engine 这一条检索路径，它必须与旧函数逐位等价。
+
+        接管前 `retrieve()` 直接调 `search_bm25(raw=False)`：分数含质量系数、
+        按 (分数降序, id 升序) 排。换成 `engine.search('bm25')` 后若哪一步走样
+        （少了质量系数、换了排序键），界面上只是排序变得"有点怪"，没有测试
+        就会被当成调优问题查很久。
+        """
+        chunks = [
+            chunk("a"), chunk("b", "待继续拆分的概念"), chunk("c"),
+            {"id": "d", "heading_path": "日志", "source_file": "b.md",
+             "document_title": "笔记", "text": "今天下雨，缓存没命中。"},
+        ]
+        engine = RetrievalEngine(chunks)
+        for query in ("PagedAttention KV Cache", "缓存", "不存在的词"):
+            for top_k in (1, 2, 4):
+                with self.subTest(query=query, top_k=top_k):
+                    expected = search_bm25(query, chunks, engine.bm25, top_k=top_k, raw=False)
+                    actual = engine.search(query, "bm25", top_k)
+                    self.assertEqual([hit.chunk["id"] for hit in actual],
+                                     [item[0]["id"] for item in expected])
+                    for hit, (_, score, tokens) in zip(actual, expected, strict=True):
+                        self.assertAlmostEqual(hit.score, score)
+                        self.assertEqual(hit.matched_tokens, tokens)
     def test_rrf_uses_ranks_not_incomparable_raw_scores(self):
         a, b = chunk("a"), chunk("b")
         hits = fuse_rankings({"bm25": [(a, 9000, set()), (b, 10, set())],
