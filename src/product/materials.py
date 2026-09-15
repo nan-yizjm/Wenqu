@@ -479,7 +479,7 @@ class MaterialService:
             raise ValueError("资料文件夹已被移除。")
         root = Path(library["root_path"])
         files = sorted(path for path in root.rglob("*") if path.is_file()
-                       and media_type_for(path.name) in {"markdown", "notebook"}
+                       and media_type_for(path.name) is not None
                        and not any(part.startswith(".") for part in path.relative_to(root).parts))
         self._start_job(job_id, len(files))
         seen, changed = set(), False

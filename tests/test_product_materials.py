@@ -264,6 +264,41 @@ class ProductMaterialTests(unittest.TestCase):
                          ["markdown", "notebook"])
         self.assertTrue(all(item["status"] == "ready" for item in documents))
 
+    def test_folder_scan_takes_pdfs_and_isolates_a_scanned_one(self):
+        """目录里混进扫描件不应该拖垮整个 job。
+
+        扫描件提取不出文字，是必然失败的；如果它让整轮扫描中断，用户会看到
+        文件夹里其他好文件一个都没进来。
+        """
+        folder = self.root / "论文"
+        folder.mkdir()
+        (folder / "笔记.md").write_text("# 笔记\n\n先写的笔记。", encoding="utf-8")
+        (folder / "有文字.pdf").write_bytes(text_pdf("PagedAttention manages KV Cache pages."))
+        buffer = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.write(buffer)
+        (folder / "扫描件.pdf").write_bytes(buffer.getvalue())
+
+        connected = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)})
+        job_id = connected.json()["job_id"]
+        job = next(item for item in self.client.get(
+            "/api/v1/import-jobs").json()["jobs"] if item["id"] == job_id)
+        self.assertEqual(job["status"], "completed_with_errors")
+        self.assertEqual((job["total"], job["failed"]), (3, 1))
+
+        documents = {item["display_name"]: item for item in self.client.get(
+            "/api/v1/documents").json()["documents"]}
+        self.assertEqual(documents["笔记.md"]["status"], "ready")
+        self.assertEqual(documents["有文字.pdf"]["status"], "ready")
+        self.assertEqual(documents["有文字.pdf"]["media_type"], "pdf")
+        self.assertEqual(documents["扫描件.pdf"]["status"], "failed")
+        self.assertIn("OCR", documents["扫描件.pdf"]["error"])
+
+        hit = self.client.get(
+            "/api/v1/search", params={"q": "PagedAttention Cache"}).json()["results"][0]
+        self.assertEqual(hit["locator"], {"kind": "pdf", "page": 1})
+
 
 if __name__ == "__main__":
     unittest.main()
