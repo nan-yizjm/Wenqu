@@ -28,6 +28,8 @@ class FakeEncoder:
 
     def __init__(self):
         self.batches = []
+        # 只触发一次的回调，用来在"编码进行中"插进一个真实的资料变更。
+        self.on_encode = None
 
     def get_embedding_dimension(self):
         return DIMENSION
@@ -39,6 +41,9 @@ class FakeEncoder:
     def encode(self, texts, **kwargs):
         single = isinstance(texts, str)
         self.batches.append([texts] if single else list(texts))
+        hook, self.on_encode = self.on_encode, None
+        if hook is not None:
+            hook()
         rows = [self._vector(text) for text in ([texts] if single else texts)]
         return np.asarray(rows if not single else rows[0], dtype=np.float32)
 
@@ -189,6 +194,36 @@ class ProductHybridTests(unittest.TestCase):
         self.assertEqual(json.loads(
             str(np.load(cached, allow_pickle=False)["metadata"].item()))["dimension"], DIMENSION)
         self.assertEqual(len(list(self.paths.indexes.glob("*/vector_index.npz"))), 1)
+
+    def test_a_build_superseded_midway_reports_success_and_redoes_the_current_version(self):
+        """编码要几分钟，期间用户又加了资料是常事——那不是失败，是改做当前版本。
+
+        把它记成失败，任务列表里就会出现一排红色记录，让人以为建索引本身出了
+        问题；真正该做的是收尾时为新版本重排一次。这里让编码器在编码途中插进
+        一份新资料，把"建到一半资料变了"这个竞态直接构造出来。
+        """
+        self.mode("hybrid")
+        self.upload("一.md", "# 一\n\n最早的资料。")
+        # 走服务方法而不是 HTTP：编码就在请求线程里跑，从那里再发一次同步请求
+        # 会被 TestClient 挡下来（"cannot be called from the event loop thread"）。
+        materials = self.client.app.state.materials
+        self.encoder.on_encode = lambda: materials.upload(
+            "三.md", f"# 三\n\n后来的资料，讲到{PASSAGE_ONLY}。".encode("utf-8"))
+        self.upload("二.md", "# 二\n\n中间的资料。")
+
+        builds = [job for job in self.client.get("/api/v1/import-jobs").json()["jobs"]
+                  if job["job_type"] == "build_vector_index"]
+        superseded = [job for job in builds if "作废" in (job["message"] or "")]
+        self.assertEqual(len(superseded), 1)
+        self.assertEqual(superseded[0]["status"], "completed")
+        self.assertEqual(superseded[0]["failed"], 0)
+        # 作废之后必须自动补上当前版本，而不是留下一个没有语义索引的工作台。
+        current = self.search(QUERY_ONLY)["index_version"]
+        self.assertEqual(self.client.get(
+            "/api/v1/setup").json()["materials"]["vector_index"],
+            {"status": "ready", "version_id": current})
+        self.assertEqual(self.search(QUERY_ONLY)["effective_mode"], "hybrid")
+        self.assertEqual(self.search(QUERY_ONLY)["results"][0]["title"], "三.md")
 
 
 if __name__ == "__main__":

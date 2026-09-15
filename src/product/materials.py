@@ -381,10 +381,11 @@ class MaterialService:
             return None
         with self._vector_lock:
             ready = self._vector_ready
+            # 正在建的那一版可能已经被顶掉；不排队，等它收尾时自己再喊一次，
+            # 否则连着上传几个文件就会排出好几个注定作废、白编码一遍的构建。
             if (ready is not None and ready[0] == snapshot.version_id) \
-                    or self._vector_building == snapshot.version_id:
+                    or self._vector_building is not None:
                 return None
-        with self._vector_lock:
             self._vector_building = snapshot.version_id
         job_id = self._job("build_vector_index", {
             "version_id": snapshot.version_id, "chunks": len(snapshot.chunks)})
@@ -392,36 +393,51 @@ class MaterialService:
         return job_id
 
     def _build_vector_index(self, job_id: str, version_id: str):
+        """为"轮到执行时"的那一版建索引；`version_id` 是当初排队的那一版。
+
+        编码要几分钟，排队到真正开跑之间资料很可能已经变了。这时建排队的那一版
+        纯属白编码——新版本马上又得建一次，所以直接改做当前版本。只有编码过程
+        中才发生的变更算"作废"，收尾时为新版本补一次。
+        """
         from ..vector_retrieve import VectorIndex
 
+        superseded = False
         try:
             self._start_job(job_id, 1)
             with self._snapshot_lock:
                 snapshot = self._snapshot
-            if snapshot.version_id != version_id:
-                raise ValueError("资料在建立向量索引期间发生了变化，这一版已作废。")
             encoder = self._encoder_instance()
             if encoder is None:
                 raise ValueError("检索模型尚未准备完成，请先在设置页准备检索模型。")
-            chunks = list(snapshot.chunks)
             index = VectorIndex(
-                chunks, device="cpu", encoder=encoder,
-                cache_path=self._vector_cache_path(version_id),
+                list(snapshot.chunks), device="cpu", encoder=encoder,
+                cache_path=self._vector_cache_path(snapshot.version_id),
                 reuse_from=self._previous_vector_index(),
             )
             with self._snapshot_lock:
                 current = self._snapshot
-            if current.version_id == version_id:
+            # 这份索引对它自己那一版始终有效，所以总是记下来：`retrieve()` 和
+            # `_vector_state()` 都按版本号判断，不会误用它；而它是下一次增量
+            # 复用的唯一来源，作废的那一版正是靠这里被记住的。
+            with self._vector_lock:
+                self._vector_ready = (snapshot.version_id, index)
+            superseded = current.version_id != snapshot.version_id
+            if not superseded:
                 current.engine.vector = index
-                with self._vector_lock:
-                    self._vector_ready = (version_id, index)
-            self._advance_job(job_id)
+            # 被顶掉不是出错：编码的这几分钟里用户又加了资料而已，收尾时会为
+            # 新版本重排一次。报成失败会让人以为建索引本身有问题。
+            self._advance_job(job_id, message="资料已更新，这一版作废，改为为新版本建立索引。"
+                              if superseded else None)
             self._finish_job(job_id)
         finally:
             # 失败也要放开，否则这个版本再也不会重试。
             with self._vector_lock:
                 if self._vector_building == version_id:
                     self._vector_building = None
+            # 只有"作废"才自动重排。真失败要留给用户看到并手动重试，不然
+            # 编码器装不上就会变成无限重试。
+            if superseded:
+                self.ensure_vector_index()
 
     def _previous_vector_index(self):
         """给增量复用找一个旧缓存：内存里那一份就是上一版。
