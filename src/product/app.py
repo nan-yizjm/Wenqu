@@ -30,13 +30,13 @@ from .support import MAX_BACKUP_BYTES, SupportService
 
 ALLOWED_SETTINGS = {
     "provider", "ollama_base_url", "ollama_model", "onboarding_complete",
-    "display_name", "retrieval_mode", "deepseek_model",
+    "display_name", "retrieval_mode", "deepseek_model", "theme",
 }
 DEFAULT_SETTINGS = {
     "provider": "ollama", "ollama_base_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen2.5:7b", "onboarding_complete": False,
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
-    "deepseek_model": "deepseek-chat",
+    "deepseek_model": "deepseek-chat", "theme": "system",
 }
 
 
@@ -49,12 +49,20 @@ class SettingsPatch(BaseModel):
     display_name: str | None = Field(default=None, max_length=60)
     retrieval_mode: str | None = None
     deepseek_model: str | None = Field(default=None, max_length=100)
+    theme: str | None = None
 
     @field_validator("provider")
     @classmethod
     def provider_allowed(cls, value):
         if value is not None and value not in ("ollama", "deepseek"):
             raise ValueError("provider 只能是 ollama 或 deepseek")
+        return value
+
+    @field_validator("theme")
+    @classmethod
+    def theme_allowed(cls, value):
+        if value is not None and value not in ("system", "light", "dark"):
+            raise ValueError("theme 只能是 system、light 或 dark")
         return value
 
     @field_validator("retrieval_mode")
@@ -132,8 +140,6 @@ def current_settings(database: Database):
     """
     stored = database.get_settings()
     return {**DEFAULT_SETTINGS, **{key: stored[key] for key in stored if key in ALLOWED_SETTINGS}}
-
-
 
 
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,

@@ -69,7 +69,7 @@ class ProductFoundationTests(unittest.TestCase):
         「保存失败」，而且改哪个字段都没用。
         """
         self.client.app.state.database.set_settings({"active_index_version": "idx_fixture"})
-        self.client.patch("/api/v1/settings", json={"display_name": "技术资料"})
+        self.client.patch("/api/v1/settings", json={"display_name": "技术资料", "theme": "dark"})
 
         reported = self.client.get("/api/v1/setup").json()["settings"]
         self.assertNotIn("active_index_version", reported)

@@ -3,6 +3,7 @@ import { api, type Diagnostics, type ProductSettings, type ResourcesIndex, type 
 import { LibraryPage } from './LibraryPage'
 import { ChatPage } from './ChatPage'
 import { FavoritesPage } from './FavoritesPage'
+import { applyTheme, THEME_OPTIONS, watchSystemTheme } from './lib/theme'
 
 type Page = 'library' | 'chat' | 'favorites' | 'settings'
 const nav: { id: Page; icon: string; label: string }[] = [
@@ -73,6 +74,10 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
     <div className="settings-grid">
       <section className="card"><h3>工作台</h3><label>显示名称<input value={form.display_name}
         onChange={e => setForm({ ...form, display_name: e.target.value })} /></label>
+        <label>外观</label><div className="segmented">
+          {THEME_OPTIONS.map(option => <button key={option.value} className={form.theme === option.value ? 'active' : ''}
+            onClick={() => { setForm({ ...form, theme: option.value }); applyTheme(option.value) }}>{option.label}</button>)}
+        </div>
         <div className="status-row"><span>用户数据</span><code>{setup.data_root}</code></div></section>
       <section className="card"><h3>生成模型</h3><div className="segmented">
         <button className={form.provider === 'ollama' ? 'active' : ''} onClick={() => setForm({ ...form, provider: 'ollama' })}>本机 Ollama</button>
@@ -164,6 +169,9 @@ export default function App() {
   const [failure, setFailure] = useState('')
   const reload = async () => { try { setSetup(await api.setup()) } catch (e) { setFailure(e instanceof Error ? e.message : '无法连接本地服务') } }
   useEffect(() => { void reload() }, [])
+  const theme = setup?.settings.theme
+  useEffect(() => { if (theme) applyTheme(theme) }, [theme])
+  useEffect(() => { if (theme) return watchSystemTheme(theme) }, [theme])
   if (failure) return <main className="fatal"><h1>工作台没有准备好</h1><p>{failure}</p><button onClick={() => location.reload()}>重新连接</button></main>
   if (!setup) return <main className="loading"><div className="spinner" /><p>正在打开知识工作台…</p></main>
   if (setup.recovery_required) return <Recovery setup={setup} />

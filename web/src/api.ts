@@ -6,6 +6,7 @@ export type ProductSettings = {
   display_name: string
   retrieval_mode: 'bm25' | 'hybrid'
   deepseek_model: string
+  theme: 'system' | 'light' | 'dark'
 }
 
 export type SetupState = {
