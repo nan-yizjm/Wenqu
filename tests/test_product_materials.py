@@ -1,4 +1,5 @@
 from io import BytesIO
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +11,11 @@ from src.product.app import create_product_app
 from src.product.credentials import MemoryCredentialStore
 from src.product.paths import ProductPaths
 from src.product.retrieval_model import MemoryRetrievalModelManager
+
+
+def notebook_bytes(cells: list[dict]) -> bytes:
+    return json.dumps({"cells": cells, "metadata": {}, "nbformat": 4, "nbformat_minor": 5},
+                      ensure_ascii=False).encode("utf-8")
 
 
 def text_pdf(text: str) -> bytes:
@@ -127,7 +133,6 @@ class ProductMaterialTests(unittest.TestCase):
             "/api/v1/documents").json()["documents"] if item["id"] == failed["id"])
         self.assertEqual(failed_again["status"], "failed")
 
-
     def test_bundled_resources_are_listed_and_served(self):
         index = self.client.get("/api/v1/resources").json()
         self.assertIn("欢迎使用.md", [item["name"] for item in index["examples"]])
@@ -167,6 +172,97 @@ class ProductMaterialTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(self.client.get(
             "/api/v1/documents").json()["documents"], [])
+
+    def test_notebook_cell_locator_lines_into_the_extracted_text(self):
+        """notebook 的 locator 行号必须落在拼接文本的真实位置上。
+
+        来源面板拿 locator 的行号去 `source().text` 里取行高亮，两边的行号
+        一旦错位，界面就会高亮到别的单元格——而且搜出来的片段看起来还是对的。
+        """
+        cells = [
+            {"cell_type": "markdown", "metadata": {},
+             "source": ["# 推理优化\n", "\n", "先看分页注意力的动机。"]},
+            {"cell_type": "code", "metadata": {}, "execution_count": 1,
+             "source": ["import math\n", "print(math.pi)"],
+             "outputs": [{"output_type": "stream", "name": "stdout", "text": ["3.14"]}]},
+            {"cell_type": "markdown", "metadata": {},
+             "source": ["## PagedAttention\n", "\n", "分页管理 KV Cache。"]},
+        ]
+        uploaded = self.client.post("/api/v1/documents/upload", files={
+            "file": ("优化.ipynb", notebook_bytes(cells), "application/json")})
+        self.assertEqual(uploaded.status_code, 200)
+
+        results = self.client.get(
+            "/api/v1/search", params={"q": "分页管理 KV Cache"}).json()["results"]
+        hit = next(item for item in results if item["locator"]["cell"] == 3)
+        self.assertEqual(hit["media_type"], "notebook")
+        self.assertEqual(hit["heading_path"], "优化 > 单元格 3 > PagedAttention")
+        self.assertEqual(hit["locator"]["kind"], "notebook")
+
+        source = self.client.get(
+            f"/api/v1/documents/{hit['document_id']}/versions/{hit['version_id']}/source").json()
+        lines = source["text"].splitlines()
+        quoted = "\n".join(lines[hit["locator"]["start_line"] - 1:hit["locator"]["end_line"]])
+        self.assertIn("分页管理 KV Cache", quoted)
+
+        code = next(item for item in self.client.get(
+            "/api/v1/search", params={"q": "print math.pi"}).json()["results"]
+            if item["locator"]["cell"] == 2)
+        self.assertEqual(code["heading_path"], "优化 > 单元格 2 · 代码")
+        self.assertIn("print(math.pi)", "\n".join(
+            lines[code["locator"]["start_line"] - 1:code["locator"]["end_line"]]))
+
+        served = self.client.get(
+            f"/api/v1/documents/{hit['document_id']}/versions/{hit['version_id']}/file")
+        self.assertEqual(served.status_code, 200)
+        self.assertIn("application/x-ipynb+json", served.headers["content-type"])
+
+    def test_notebook_rich_output_is_dropped_and_reported(self):
+        cells = [{"cell_type": "code", "metadata": {}, "source": ["plot()"], "outputs": [
+            {"output_type": "display_data",
+             "data": {"image/png": "aGVsbG8=", "text/plain": ["<Figure size 640x480>"]}},
+            {"output_type": "execute_result", "data": {"text/plain": ["42"]}},
+            {"output_type": "stream", "name": "stdout", "text": ["done\n"]},
+        ]}]
+        self.client.post("/api/v1/documents/upload", files={
+            "file": ("画图.ipynb", notebook_bytes(cells), "application/json")})
+
+        document = self.client.get("/api/v1/documents").json()["documents"][0]
+        self.assertEqual(document["status"], "ready")
+        self.assertIn("未收录", document["error"])
+        source = self.client.get(
+            f"/api/v1/documents/{document['id']}/versions/{document['current_version_id']}/source")
+        self.assertIn("<Figure size 640x480>", source.json()["text"])
+        self.assertNotIn("aGVsbG8=", source.json()["text"])
+
+    def test_broken_notebook_fails_with_a_clear_message(self):
+        for name, payload, expected in (
+            ("乱码.ipynb", b"not json at all", "有效的 JSON"),
+            ("缺单元格.ipynb", json.dumps({"nbformat": 4}).encode("utf-8"), "cells"),
+        ):
+            with self.subTest(name=name):
+                self.client.post("/api/v1/documents/upload",
+                                 files={"file": (name, payload, "application/json")})
+                document = next(item for item in self.client.get(
+                    "/api/v1/documents").json()["documents"] if item["display_name"] == name)
+                self.assertEqual(document["status"], "failed")
+                self.assertIn(expected, document["error"])
+
+    def test_folder_scan_picks_up_notebooks_next_to_markdown(self):
+        folder = self.root / "混合资料"
+        folder.mkdir()
+        (folder / "笔记.md").write_text("# 笔记\n\n普通 Markdown。", encoding="utf-8")
+        (folder / "实验.ipynb").write_text(
+            notebook_bytes([{"cell_type": "markdown", "metadata": {},
+                             "source": ["# 实验\n", "\n", "记录一次消融实验。"]}])
+            .decode("utf-8"), encoding="utf-8")
+
+        connected = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)})
+        self.assertEqual(connected.status_code, 200)
+        documents = self.client.get("/api/v1/documents").json()["documents"]
+        self.assertEqual(sorted(item["media_type"] for item in documents),
+                         ["markdown", "notebook"])
+        self.assertTrue(all(item["status"] == "ready" for item in documents))
 
 
 if __name__ == "__main__":

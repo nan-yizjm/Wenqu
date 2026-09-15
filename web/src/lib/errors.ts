@@ -8,7 +8,7 @@ const HINTS: Record<string, string> = {
   folder_picker_failed: '没能打开系统文件夹选择器。可以直接把文件夹路径粘贴到输入框。',
   unknown_setting: '当前版本不认识这个设置项，请更新到最新版本。',
   invalid_folder: '这个文件夹读不到，请确认路径存在、可读，并且里面有 Markdown 文件。',
-  invalid_document: '这个文件暂时不能导入。目前支持 Markdown 与 PDF。',
+  invalid_document: '这个文件暂时不能导入。目前支持 Markdown、PDF 与 Jupyter Notebook。',
   invalid_backup: '备份文件没有通过校验，请选择由本工作台导出的备份压缩包。',
   invalid_request: '提交的内容没有通过校验，请检查填写格式后重试。',
   question_required: '请先输入问题。',

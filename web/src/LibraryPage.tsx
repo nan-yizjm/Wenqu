@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type BundledResource, type DocumentItem, type ImportJob, type Library, type SearchHit } from './api'
+import { locatorLabel, mediaLabel } from './lib/locator'
 import { SourcePanel } from './SourcePanel'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
 
@@ -66,10 +67,10 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const activeJob = jobs.find(job => ['pending', 'running'].includes(job.status))
   return <div className={selected ? 'library-layout with-source' : 'library-layout'}>
     <div className="library-main"><header className="library-heading"><div><span className="eyebrow">YOUR KNOWLEDGE</span><h1>资料库</h1>
-      <p>连接只读 Markdown 文件夹，或把单独的 Markdown / PDF 保存到工作台。</p></div>
+      <p>连接只读的资料文件夹，或把单独的 Markdown / PDF / Jupyter Notebook 保存到工作台。</p></div>
       <button className="primary" onClick={() => uploadInput.current?.click()}>上传文件</button>
-      <input ref={uploadInput} className="hidden" type="file" accept=".md,.markdown,.pdf" onChange={event => void upload(event.target.files?.[0])} /></header>
-      <section className="add-folder"><div><strong>连接 Markdown 文件夹</strong><span>后续刷新只读取原目录，不修改原文件。</span></div>
+      <input ref={uploadInput} className="hidden" type="file" accept=".md,.markdown,.pdf,.ipynb" onChange={event => void upload(event.target.files?.[0])} /></header>
+      <section className="add-folder"><div><strong>连接资料文件夹</strong><span>后续刷新只读取原目录，不修改原文件。</span></div>
         <div className="folder-row"><input value={folder} onChange={e => setFolder(e.target.value)} placeholder="选择或粘贴文件夹路径" />
           <button className="ghost" onClick={chooseFolder}>选择</button><button className="primary" onClick={connect}>连接</button></div></section>
       {activeJob && <div className="job-banner"><span className="spinner small" /><div><strong>正在处理资料</strong>
@@ -81,8 +82,8 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
       <section className="search-box"><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void search() }} placeholder="搜索你的全部资料，例如：PagedAttention 解决什么问题？" />
         <button className="primary" onClick={search}>搜索</button></section>
       {hits.length > 0 && <section className="search-results"><div className="section-title"><h2>搜索结果</h2><span>{hits.length} 个片段</span></div>
-        {hits.map(hit => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}><div><span className="file-type">{hit.media_type === 'pdf' ? 'PDF' : 'MD'}</span><strong>{hit.title}</strong></div>
-          <small>{hit.heading_path} · {hit.locator.kind === 'pdf' ? `第 ${hit.locator.page} 页` : `第 ${hit.locator.start_line}–${hit.locator.end_line} 行`}</small><p>{hit.preview}</p></button>)}</section>}
+        {hits.map(hit => <button className="result-card" key={hit.chunk_id} onClick={() => setSelected(hit)}><div><span className="file-type">{mediaLabel(hit.media_type)}</span><strong>{hit.title}</strong></div>
+          <small>{hit.heading_path} · {locatorLabel(hit.locator)}</small><p>{hit.preview}</p></button>)}</section>}
       <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span></div>
         {!loaded ? <div className="documents-skeleton"><SkeletonLines count={3} /></div>
           : documents.length === 0 ? <EmptyState glyph="▤" title="还没有接入资料">
@@ -93,7 +94,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
                 className="secondary" onClick={() => void importExample(item.name)}>导入随包示例「{item.name}」</button>)}</div>
             </>}
           </EmptyState> :
-          <div className="document-list">{documents.map(document => <div className="document-row" key={document.id}><span className="file-icon">{document.media_type === 'pdf' ? 'PDF' : 'MD'}</span>
+          <div className="document-list">{documents.map(document => <div className="document-row" key={document.id}><span className="file-icon">{mediaLabel(document.media_type)}</span>
             <div><strong>{document.display_name}</strong><small>{document.library_name} / {document.relative_path}</small>{document.error && <em>{document.error}</em>}</div>
             <span className={`status-chip ${document.status}`}>{document.status === 'ready' ? '可搜索' : document.status === 'failed' ? '失败' : document.status === 'processing' ? '处理中' : document.status}</span>
             <span className="row-actions">{document.status === 'failed' && <button className="row-action" onClick={() => void retry(document)}>重试</button>}<button className="row-action" onClick={() => void remove(document)}>移除</button></span></div>)}</div>}

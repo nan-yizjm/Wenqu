@@ -18,7 +18,14 @@ from .paths import ProductPaths
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_PDF_PAGES = 2000
 MAX_CHUNK_CHARS = 1600
+MAX_NOTEBOOK_CELLS = 5000
+MAX_CELL_OUTPUT_CHARS = 4000
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+MEDIA_TYPES = {".md": "markdown", ".markdown": "markdown", ".pdf": "pdf", ".ipynb": "notebook"}
+
+
+def media_type_for(name: str) -> str | None:
+    return MEDIA_TYPES.get(Path(name).suffix.lower())
 
 
 def _id(prefix: str) -> str:
@@ -113,6 +120,120 @@ def pdf_chunks(data: bytes, title: str) -> tuple[list[dict], str | None]:
         raise ValueError("PDF 未提取到文字，可能是扫描件；首版暂不提供 OCR。")
     warning = f"{len(empty_pages)} 页未提取到文字" if empty_pages else None
     return chunks, warning
+
+
+def _joined_text(value) -> str:
+    """nbformat 的字符串字段既可能是 str 也可能是逐行 list。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(part for part in value if isinstance(part, str))
+    return ""
+
+
+def _output_text(output: dict) -> tuple[str, bool]:
+    """取一段输出的纯文本，返回值第二项表示是否丢弃了富媒体。"""
+    kind = output.get("output_type")
+    if kind == "stream":
+        return _joined_text(output.get("text")), False
+    if kind in ("execute_result", "display_data"):
+        data = output.get("data")
+        if not isinstance(data, dict):
+            return "", False
+        return _joined_text(data.get("text/plain")), any(key != "text/plain" for key in data)
+    return "", False
+
+
+def notebook_chunks(data: bytes, title: str) -> tuple[list[dict], str, str | None]:
+    """把 .ipynb 拆成可检索片段，并给出配对的纯文本。
+
+    返回的 text 是各单元格按顺序拼起来的，locator 里的行号就指向它——来源
+    面板靠行号高亮，所以两边必须来自同一次拼接。
+    """
+    try:
+        notebook = json.loads(data.decode("utf-8-sig"))
+    except UnicodeDecodeError as error:
+        raise ValueError("Notebook 不是有效的 UTF-8 编码。") from error
+    except json.JSONDecodeError as error:
+        raise ValueError("Notebook 不是有效的 JSON，可能已损坏。") from error
+    cells = notebook.get("cells") if isinstance(notebook, dict) else None
+    if not isinstance(cells, list):
+        raise ValueError("Notebook 缺少 cells，暂不支持这种格式。")
+    if len(cells) > MAX_NOTEBOOK_CELLS:
+        raise ValueError(f"Notebook 单元格数量超过限制（{MAX_NOTEBOOK_CELLS} 个）。")
+
+    chunks: list[dict] = []
+    body: list[str] = []
+    dropped_media = truncated = 0
+
+    def emit(block: str) -> int:
+        """写入一个文本块，返回它在一基行号下的起始行。"""
+        start = len(body) + 1
+        body.extend(block.splitlines() or [""])
+        return start
+
+    def section(label: str):
+        emit(f"--- 单元格 {label} ---")
+
+    def collect(index: int, cell_type: str, label: str, start: int, text: str):
+        """把一段单元格文本切片；行号与拼接文本严格对齐。"""
+        numbered = [(start + offset, line) for offset, line in enumerate(text.splitlines())]
+        for piece in _split_lines([item for item in numbered if item[1].strip()]):
+            chunks.append({
+                "heading_path": f"{title} > 单元格 {index} · {label}",
+                "locator": {"kind": "notebook", "cell": index, "cell_type": cell_type,
+                            "start_line": piece[0][0], "end_line": piece[-1][0]},
+                "text": "\n".join(line for _, line in piece),
+            })
+
+    for index, cell in enumerate(cells, 1):
+        if not isinstance(cell, dict):
+            continue
+        source = _joined_text(cell.get("source")).rstrip("\n")
+        cell_type = cell.get("cell_type")
+        if cell_type == "code":
+            if source.strip():
+                section(f"{index} · 代码")
+                collect(index, "code", "代码", emit(source), source)
+            outputs = cell.get("outputs")
+            collected = []
+            for output in outputs if isinstance(outputs, list) else []:
+                if not isinstance(output, dict):
+                    continue
+                text, rich = _output_text(output)
+                dropped_media += int(rich)
+                if text.strip():
+                    collected.append(text.rstrip("\n"))
+            if collected:
+                joined = "\n".join(collected)
+                cut = len(joined) > MAX_CELL_OUTPUT_CHARS
+                if cut:
+                    joined, truncated = joined[:MAX_CELL_OUTPUT_CHARS], truncated + 1
+                section(f"{index} · 输出")
+                if cut:
+                    emit(f"（输出超过 {MAX_CELL_OUTPUT_CHARS} 字，已截断）")
+                collect(index, "output", "输出", emit(joined), joined)
+        elif source.strip():
+            # markdown 与 raw 都是正文，交给 markdown_chunks 复用标题切分；
+            # 行号按单元格在拼接文本里的起点整体平移。
+            section(f"{index} · {cell_type or 'markdown'}")
+            cell_start = emit(source)
+            for piece in markdown_chunks(source, f"单元格 {index}"):
+                chunks.append({
+                    "heading_path": f"{title} > {piece['heading_path']}",
+                    "locator": {"kind": "notebook", "cell": index,
+                                "cell_type": cell_type or "markdown",
+                                "start_line": cell_start + piece["locator"]["start_line"] - 1,
+                                "end_line": cell_start + piece["locator"]["end_line"] - 1},
+                    "text": piece["text"],
+                })
+
+    notes = []
+    if dropped_media:
+        notes.append(f"{dropped_media} 处图片或富媒体输出未收录")
+    if truncated:
+        notes.append(f"{truncated} 处输出过长已截断")
+    return chunks, "\n".join(body), "；".join(notes) or None
 
 
 @dataclass(frozen=True)
@@ -257,7 +378,7 @@ class MaterialService:
     def connect_folder(self, root_path: str, name: str | None = None):
         root = Path(root_path).expanduser().resolve()
         if not root.is_dir():
-            raise ValueError("所选 Markdown 文件夹不存在或不可读取。")
+            raise ValueError("所选资料文件夹不存在或不可读取。")
         existing = self.database.fetchone(
             "SELECT id FROM libraries WHERE kind='folder' AND active=1 AND root_path=?",
             (str(root),))
@@ -287,9 +408,9 @@ class MaterialService:
             raise ValueError("上传文件为空。")
         if len(data) > MAX_UPLOAD_BYTES:
             raise ValueError("文件超过 50 MB 上传限制。")
-        suffix = Path(filename).suffix.lower()
-        if suffix not in {".md", ".markdown", ".pdf"}:
-            raise ValueError("只支持 Markdown 和 PDF 文件。")
+        media_type = media_type_for(filename)
+        if media_type is None:
+            raise ValueError("只支持 Markdown、PDF 和 Jupyter Notebook 文件。")
         library = self.database.fetchone("SELECT * FROM libraries WHERE kind='uploads' AND active=1")
         if library:
             library_id = library["id"]
@@ -307,7 +428,7 @@ class MaterialService:
                     media_type, status, source_size, created_at, updated_at)
                 VALUES (?, ?, 'upload', ?, ?, ?, 'processing', ?, ?, ?)
             """, (document_id, library_id, relative, Path(filename).name,
-                  "pdf" if suffix == ".pdf" else "markdown", len(data), now, now))
+                  media_type, len(data), now, now))
         pending = self.paths.runtime / "uploads" / relative
         _atomic_write(pending, data)
         job_id = self._job("upload", {"document_id": document_id})
@@ -358,7 +479,7 @@ class MaterialService:
             raise ValueError("资料文件夹已被移除。")
         root = Path(library["root_path"])
         files = sorted(path for path in root.rglob("*") if path.is_file()
-                       and path.suffix.lower() in {".md", ".markdown"}
+                       and media_type_for(path.name) in {"markdown", "notebook"}
                        and not any(part.startswith(".") for part in path.relative_to(root).parts))
         self._start_job(job_id, len(files))
         seen, changed = set(), False
@@ -407,6 +528,9 @@ class MaterialService:
         stat = path.stat()
         if (before.st_mtime_ns, before.st_size) != (stat.st_mtime_ns, stat.st_size):
             raise ValueError("文件在导入过程中发生变化，请稍后刷新重试。")
+        media_type = media_type_for(path.name)
+        if media_type is None:
+            raise ValueError("这个文件类型暂不支持。")
         row = self.database.fetchone(
             "SELECT * FROM documents WHERE library_id=? AND relative_path=?", (library_id, relative))
         if row and row["checksum"] == sha256(data).hexdigest() and row["removed_at"] is None:
@@ -425,10 +549,10 @@ class MaterialService:
                 connection.execute("""
                     INSERT INTO documents(id, library_id, source_kind, relative_path, display_name,
                         media_type, status, source_mtime_ns, source_size, created_at, updated_at)
-                    VALUES (?, ?, 'folder', ?, ?, 'markdown', 'processing', ?, ?, ?, ?)
-                """, (document_id, library_id, relative, path.name, stat.st_mtime_ns,
+                    VALUES (?, ?, 'folder', ?, ?, ?, 'processing', ?, ?, ?, ?)
+                """, (document_id, library_id, relative, path.name, media_type, stat.st_mtime_ns,
                       stat.st_size, now, now))
-        self._store_version(document_id, path.name, "markdown", data)
+        self._store_version(document_id, path.name, media_type, data)
         return True
 
     def _import_upload(self, job_id: str, document_id: str, pending: Path):
@@ -455,6 +579,9 @@ class MaterialService:
                 raise ValueError("Markdown 不是有效的 UTF-8 编码，请转换编码后重试。") from error
             chunks, warning = markdown_chunks(text, Path(title).stem), None
             suffix = ".md"
+        elif media_type == "notebook":
+            chunks, text, warning = notebook_chunks(data, Path(title).stem)
+            suffix = ".ipynb"
         else:
             chunks, warning = pdf_chunks(data, title)
             text, suffix = "\n\n".join(chunk["text"] for chunk in chunks), ".pdf"

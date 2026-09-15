@@ -26,6 +26,8 @@ def _location(source):
     locator = source["locator"]
     if locator.get("kind") == "pdf":
         return f"第 {locator.get('page')} 页"
+    if locator.get("kind") == "notebook":
+        return f"单元格 {locator.get('cell')}（第 {locator.get('start_line')}–{locator.get('end_line')} 行）"
     return f"第 {locator.get('start_line')}–{locator.get('end_line')} 行"
 
 

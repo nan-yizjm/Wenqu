@@ -38,6 +38,11 @@ DEFAULT_SETTINGS = {
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
     "deepseek_model": "deepseek-chat", "theme": "system",
 }
+SOURCE_MEDIA_TYPES = {
+    "pdf": "application/pdf",
+    "markdown": "text/markdown; charset=utf-8",
+    "notebook": "application/x-ipynb+json",
+}
 
 
 class SettingsPatch(BaseModel):
@@ -536,8 +541,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     async def document_file(document_id: str, version_id: str, request: Request):
         try:
             path, media_type, name = request.app.state.materials.source_file(document_id, version_id)
-            return FileResponse(path, media_type=("application/pdf" if media_type == "pdf"
-                                                  else "text/markdown; charset=utf-8"),
+            return FileResponse(path, media_type=SOURCE_MEDIA_TYPES.get(
+                                    media_type, "application/octet-stream"),
                                 filename=name, content_disposition_type="inline")
         except KeyError as error:
             return JSONResponse({"error": "source_not_found", "message": str(error.args[0])},

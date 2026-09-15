@@ -23,11 +23,17 @@ export type SetupState = {
   recovery_backups?: { name: string; size: number; modified_at: string }[]
 }
 
+export type MediaType = 'markdown' | 'pdf' | 'notebook'
+export type Locator =
+  | { kind: 'markdown'; start_line: number; end_line: number }
+  | { kind: 'pdf'; page: number }
+  | { kind: 'notebook'; cell: number; cell_type: string; start_line: number; end_line: number }
+
 export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
-export type DocumentItem = { id: string; library_id: string; relative_path: string; display_name: string; media_type: 'markdown' | 'pdf'; status: string; error: string | null; current_version_id: string | null; updated_at: string; library_name: string }
+export type DocumentItem = { id: string; library_id: string; relative_path: string; display_name: string; media_type: MediaType; status: string; error: string | null; current_version_id: string | null; updated_at: string; library_name: string }
 export type ImportJob = { id: string; job_type: string; status: string; total: number; completed: number; failed: number; message: string | null }
-export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; heading_path: string; locator: { kind: 'markdown'; start_line: number; end_line: number } | { kind: 'pdf'; page: number }; preview: string; score: number; matched_tokens: string[] }
-export type SourceContent = { document_id: string; version_id: string; title: string; media_type: 'markdown' | 'pdf'; text: string }
+export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: MediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[] }
+export type SourceContent = { document_id: string; version_id: string; title: string; media_type: MediaType; text: string }
 export type MessageSource = Omit<SearchHit, 'score' | 'matched_tokens'> & { label: string; position?: number }
 export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[] }
 export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }

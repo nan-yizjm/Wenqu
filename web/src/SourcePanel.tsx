@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type SearchHit, type SourceContent } from './api'
+import { locatorLabel, locatorLines } from './lib/locator'
 import { SkeletonLines } from './components/Placeholders'
 
 function PdfPage({ hit }: { hit: SearchHit }) {
@@ -49,15 +50,16 @@ export function SourcePanel({ hit, close }: { hit: SearchHit; close: () => void 
     void api.source(hit.document_id, hit.version_id).then(setSource).catch(e => setError(e.message))
   }, [hit])
   const lines = source?.text.split(/\r?\n/) ?? []
+  const selected = locatorLines(hit.locator)
   return <aside className="source-panel">
     <header><div><span className="eyebrow">SOURCE SNAPSHOT</span><h2>{hit.title}</h2><p>{hit.heading_path}</p></div>
       <button className="icon-button" onClick={close} aria-label="关闭来源">×</button></header>
-    <div className="source-location">{hit.locator.kind === 'pdf' ? `第 ${hit.locator.page} 页` : `第 ${hit.locator.start_line}–${hit.locator.end_line} 行`} · 历史快照</div>
+    <div className="source-location">{locatorLabel(hit.locator)} · 历史快照</div>
     {error ? <p className="panel-error">{error}</p> : hit.media_type === 'pdf' ? <PdfPage hit={hit} /> : !source ?
       <SkeletonLines count={8} className="panel-skeleton" /> : <div className="markdown-source">{lines.map((line, index) => {
         const number = index + 1
-        const selected = hit.locator.kind === 'markdown' && number >= hit.locator.start_line && number <= hit.locator.end_line
-        return <div key={number} className={selected ? 'source-line selected' : 'source-line'}>
+        const on = selected !== null && number >= selected[0] && number <= selected[1]
+        return <div key={number} className={on ? 'source-line selected' : 'source-line'}>
           <span>{number}</span><code>{line || ' '}</code></div>
       })}</div>}
   </aside>
