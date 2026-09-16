@@ -2,7 +2,8 @@ param(
     [string]$Executable = ".\dist\ObsidianRAG\ObsidianRAG.exe",
     [int]$Port = 8876,
     [string]$DataRoot = "",
-    [int]$ExpectedMinimumConversations = 0
+    [int]$ExpectedMinimumConversations = 0,
+    [bool]$ExpectFreshImport = $true
 )
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -21,6 +22,21 @@ $ResolvedTestRoot = (Resolve-Path -LiteralPath $TestRoot).Path
 $ExpectedTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 if (-not $ResolvedTestRoot.StartsWith($ExpectedTempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to use a test path outside TEMP: $ResolvedTestRoot"
+}
+
+# The server answers with `application/json` and no charset parameter. Faced with
+# that, Windows PowerShell 5.1 decodes the body as ISO-8859-1 and turns every
+# UTF-8 byte into its own character, so a bundled file name arrives as 15
+# Latin-1 characters instead of "welcome.md" in Chinese. That is a different
+# problem from the script encoding fixed below (line ~70) and it breaks the
+# name comparisons just as badly. Decode the raw bytes as UTF-8 explicitly so
+# Windows PowerShell 5.1 and PowerShell 7 agree.
+function Get-JsonUtf8 {
+    param([Parameter(Mandatory)][string]$Uri)
+    $Client = New-Object System.Net.WebClient
+    $Client.Encoding = [System.Text.Encoding]::UTF8
+    try { return ($Client.DownloadString($Uri) | ConvertFrom-Json) }
+    finally { $Client.Dispose() }
 }
 
 $Process = $null
@@ -61,7 +77,7 @@ try {
     # release check behaves identically in Windows PowerShell and PowerShell 7.
     $GuideName = (-join ([char[]](0x7528, 0x6237, 0x6307, 0x5357))) + '.md'
     $WelcomeName = (-join ([char[]](0x6b22, 0x8fce, 0x4f7f, 0x7528))) + '.md'
-    $Resources = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/resources"
+    $Resources = Get-JsonUtf8 "http://127.0.0.1:$Port/api/v1/resources"
     if ($Resources.docs.Count -lt 1) { throw 'The packaged bundle listed no bundled documents.' }
     if (-not ($Resources.examples | Where-Object { $_.name -eq $WelcomeName })) {
         throw 'The packaged bundle did not list the welcome example.'
@@ -73,17 +89,24 @@ try {
     $Import = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/resources/import" `
         -Method Post -ContentType 'application/json; charset=utf-8' `
         -Body ('{"name":"' + $WelcomeEscaped + '"}')
-    if ($Import.already_imported) { throw 'The first import of the bundled example reported already_imported.' }
+    # The installer test calls this check twice against the SAME data root: once
+    # before the upgrade install, where the example must be new, and once after
+    # it, where the same example must have survived and is therefore reported as
+    # already imported. Assert both directions instead of only the first one.
+    $ExpectedAlreadyImported = -not $ExpectFreshImport
+    if ($Import.already_imported -ne $ExpectedAlreadyImported) {
+        throw "Bundled example import reported already_imported=$($Import.already_imported), expected $ExpectedAlreadyImported. Data retention across the install may have broken."
+    }
     $Indexed = $false
     for ($Attempt = 0; $Attempt -lt 60; $Attempt++) {
-        $Documents = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/documents"
+        $Documents = Get-JsonUtf8 "http://127.0.0.1:$Port/api/v1/documents"
         $Example = $Documents.documents | Where-Object { $_.display_name -eq $WelcomeName }
         if ($Example -and $Example.status -eq 'ready') { $Indexed = $true; break }
         if ($Example -and $Example.status -eq 'failed') { throw "Bundled example import failed: $($Example.error)" }
         Start-Sleep -Milliseconds 500
     }
     if (-not $Indexed) { throw 'The bundled example was not searchable within 30 seconds.' }
-    $Search = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/search?q=PagedAttention"
+    $Search = Get-JsonUtf8 "http://127.0.0.1:$Port/api/v1/search?q=PagedAttention"
     if ($Search.results.Count -lt 1) { throw 'Searching PagedAttention found no hit in the bundled example.' }
     $Reimport = Invoke-RestMethod "http://127.0.0.1:$Port/api/v1/resources/import" `
         -Method Post -ContentType 'application/json; charset=utf-8' `

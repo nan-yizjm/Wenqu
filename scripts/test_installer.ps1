@@ -1,5 +1,5 @@
 param(
-    [string]$Installer = ".\dist-installer\ObsidianRAG-Setup-0.2.0-win-x64.exe",
+    [string]$Installer = ".\dist-installer\ObsidianRAG-Setup-0.2.1-win-x64.exe",
     [int]$Port = 8879
 )
 $ErrorActionPreference = 'Stop'
@@ -41,7 +41,7 @@ try {
     if ($Upgrade.ExitCode -ne 0) { throw "Upgrade install failed: $($Upgrade.ExitCode)" }
     & (Join-Path $ProjectRoot 'scripts\test_product_bundle.ps1') `
         -Executable (Join-Path $InstallRoot 'ObsidianRAG.exe') -Port ($Port + 1) `
-        -DataRoot $DataRoot -ExpectedMinimumConversations 1
+        -DataRoot $DataRoot -ExpectedMinimumConversations 1 -ExpectFreshImport $false
     Write-Host "Installer and data-preserving upgrade validation passed: $InstallRoot"
 } finally {
     $Uninstaller = Join-Path $InstallRoot 'unins000.exe'
