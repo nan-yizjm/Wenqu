@@ -33,6 +33,15 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--chunks",
+        default="data/generated/chunks.json",
+        # 默认值刻意保持不变，以免破坏文档里既有的复现命令与已记录的数字。
+        # 需要指到 token 感知切分那一版语料时用：
+        #   --chunks data/generated/token_v1/chunks.json
+        help="语料文件路径（相对项目根目录）。",
+    )
+
+    parser.add_argument(
         "--method",
         # choices=("idf", "bm25"),
         choices=("idf", "bm25", "multi_query"),
@@ -264,24 +273,22 @@ def print_summary(reports: list[dict], top_k: int) -> None:
 def main() -> None:
     args = parse_args()
     project_dir = Path(__file__).resolve().parent.parent
-    chunks_path = project_dir / "data" / "generated" / "chunks.json"
-    # eval_path = project_dir / "data" / "eval_set.json"
+    # 语料由 --chunks 指定。此前这里写死指向 data/generated/chunks.json（757 片段，
+    # 早于 token 感知切分），导致文档记录的基线数字无法在当前语料（token_v1，
+    # 822 片段）上复现，而运行头又看不出用的是哪一版。现在路径与片段数都打出来。
+    chunks_path = project_dir / args.chunks
     eval_path = project_dir / "data" / args.eval_file
 
-    # chunks = load_chunks(chunks_path)
-    # eval_set = load_eval_set(eval_path)
     chunks = load_chunks(chunks_path)
     eval_set = load_eval_set(eval_path)
 
     idf = build_idf(chunks)
     bm25_index = BM25Index(chunks)
 
-    # print(f"检索方法：{RETRIEVAL_METHOD}")
     print(f"检索方法：{args.method}")
     print(f"评测文件：{args.eval_file}")
+    print(f"语料文件：{args.chunks}（{len(chunks)} 片段）")
     print(f"Top-K：{args.top_k}")
-
-    idf = build_idf(chunks)
 
     # reports = [
     #     # evaluate_case(case, chunks, top_k=TOP_K)

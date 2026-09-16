@@ -46,7 +46,7 @@ QLoRA 完整进程耗时 82.8 秒，PyTorch 训练峰值分配约 5270 MiB，`nv
 .\.venv\Scripts\python.exe -X utf8 -m src.train_tiny_lm --generate '.\data\generated\tiny_lm_runs\20260912_151041_274119\best.pt' --prompt '小周来到'
 ```
 
-这是本机已生成、未纳入 Git 的检查点；新机器需先按阶段 15/16 准备数据和训练，不能仅克隆代码就假设权重存在。当前全量离线检查 88 项通过；SFT/QLoRA 与泛化入口均已在 CUDA 上实际运行并保存冻结报告，未调用远程生成 API。
+这是本机已生成、未纳入 Git 的检查点；新机器需先按阶段 15/16 准备数据和训练，不能仅克隆代码就假设权重存在。当前全量离线检查 **158 项通过**（2026-09-16 实测，12.1 秒；另有前端 `tsc -b` 零错误、39 项 vitest、设计 token 门禁）；SFT/QLoRA 与泛化入口均已在 CUDA 上实际运行并保存冻结报告，未调用远程生成 API。
 
 前一阶段已完成 [CPU/GPU 部署实测](docs/学习记录/13-CPU与GPU部署实验.md) 和 [手写 Attention / KV Cache](docs/学习记录/14-手写Attention与KVCache.md)。部署报告将加载、生成与检索分开；张量实验验证缓存结果，并复现 mask 对齐和 view 存储问题。
 
@@ -58,7 +58,18 @@ QLoRA 完整进程耗时 82.8 秒，PyTorch 训练峰值分配约 5270 MiB，`nv
 .\.venv\Scripts\python.exe -X utf8 -m src.attention_lab --device cuda
 ```
 
-最新已完成普通参数 TOML 配置、增量导入/向量复用、索引版本与回退、本机 HTTP 服务。真实目录当前为 **56 篇 / 911 片段**；旧快照与评测数据未覆盖。没有提交或推送 Git。
+最新已完成普通参数 TOML 配置、增量导入/向量复用、索引版本与回退、本机 HTTP 服务。
+
+语料口径（2026-09-16 实测，此前文档里的"56 篇 / 911 片段"只算 Markdown，已过时）：
+
+| 口径 | 规模 |
+|---|---|
+| 真实笔记目录 | **101 篇** = 56 Markdown + 44 Notebook + 1 PDF |
+| 实验线语料 `data/generated/token_v1/chunks.json` | 52 个来源 / **822 片段** |
+| 产品切分（800 字符）· 仅 Markdown | **980 片段** |
+| 产品切分（800 字符）· 完整目录 | **2014 片段** |
+
+旧快照与评测数据未覆盖。没有提交或推送 Git。
 
 日常使用：编辑 [rag.toml](rag.toml)，然后在项目根目录执行：
 

@@ -71,12 +71,17 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
   // 混合检索只有在语义索引建好之后才真的生效，否则搜索会悄悄退回关键词检索。
   // 这里把实际状态说出来，省得用户以为"开了却没效果"。
   const vector = setup.materials.vector_index
+  // 超长片段会被截断编码，语义那一半只看得到前半段。多数语料里占比不到 1%，
+  // 但既然会影响名次就如实说出来，不假装索引是完美的。
+  const truncated = vector.status === 'ready' ? vector.truncated_chunks ?? 0 : 0
+  const truncationNote = truncated ? `其中 ${truncated} 个片段超出模型长度上限，语义检索只用得到前半段。` : ''
   const vectorText = form.retrieval_mode === 'bm25' ? '当前按词面匹配，不做语义召回。'
-    : vector.status === 'ready' ? '语义索引已就绪，搜索同时使用关键词与语义。'
+    : vector.status === 'ready' ? `语义索引已就绪，搜索同时使用关键词与语义。${truncationNote}`
     : vector.status === 'building' ? '正在后台建立语义索引，完成前仍按关键词检索。'
     : modelState.status === 'ready' ? '语义索引尚未建立，保存设置后开始；建立期间仍按关键词检索。'
     : '还没有准备检索模型，混合检索暂时按关键词检索。'
-  const vectorTone = form.retrieval_mode === 'bm25' ? '' : vector.status === 'ready' ? 'green' : 'amber'
+  const vectorTone = form.retrieval_mode === 'bm25' ? ''
+    : vector.status === 'ready' ? (truncated ? 'amber' : 'green') : 'amber'
   return <div className="settings-page">
     <header className="page-heading"><div><span className="eyebrow">WORKSPACE SETTINGS</span><h1>设置</h1>
       <p>配置工作台名称、生成模型与检索方式；资料在「资料库」页管理。</p></div></header>

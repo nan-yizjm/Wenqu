@@ -221,9 +221,51 @@ class ProductHybridTests(unittest.TestCase):
         current = self.search(QUERY_ONLY)["index_version"]
         self.assertEqual(self.client.get(
             "/api/v1/setup").json()["materials"]["vector_index"],
-            {"status": "ready", "version_id": current})
+            {"status": "ready", "version_id": current, "truncated_chunks": 0})
         self.assertEqual(self.search(QUERY_ONLY)["effective_mode"], "hybrid")
+        # 补建出来的那一版必须包含编码途中新加的资料，否则等于白建。
         self.assertEqual(self.search(QUERY_ONLY)["results"][0]["title"], "三.md")
+
+    def test_over_long_chunks_are_reported_instead_of_silently_truncated(self):
+        """片段超出模型长度上限时，语义那一路只看得到前半段，名次会失真。
+
+        实验线遇到这种情况直接拒绝发布索引；产品这边只记录并说明——向量索引
+        是辅助通道，为它拒绝服务会把关键词检索一起挡掉。所以这里验证两件事：
+        状态里报得出这个数量，任务消息里也说得出原因。
+        """
+        # 段落超过 512 个字符就会超出 FakeEncoder 的 max_seq_length（按 token 数
+        # 恒等于字符数），但仍在 800 字符的切片上限之内，所以它还是单个片段。
+        self.upload("长片段.md", f"# 长片段\n\n{'长' * 520}\n\nPagedAttention 管 KV Cache。")
+        self.mode("hybrid")
+        result = self.search("PagedAttention")
+        self.assertEqual(result["effective_mode"], "hybrid")
+
+        state = self.client.get("/api/v1/setup").json()["materials"]["vector_index"]
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(state["truncated_chunks"], 1)
+
+        build = next(job for job in self.client.get("/api/v1/import-jobs").json()["jobs"]
+                     if job["job_type"] == "build_vector_index")
+        self.assertEqual(build["status"], "completed")
+        self.assertIn("长度上限", build["message"] or "")
+        # 超限只是被记下来，不该让这次构建失败——否则用户会以为索引坏了。
+        self.assertEqual(build["failed"], 0)
+
+    def test_a_clean_index_reports_zero_truncated_chunks(self):
+        """没有超限片段时也要明确报 0，别让界面把"没报"当成"没检查"。"""
+        self.upload("短片段.md", "# 短片段\n\nPagedAttention 管理 KV Cache。")
+        self.mode("hybrid")
+        self.search("PagedAttention")
+
+        state = self.client.get("/api/v1/setup").json()["materials"]["vector_index"]
+        # 就绪状态固定是这三个键：`off`/`building` 不带计数，因为"没有索引"和
+        # "索引干净"是两回事，报成 0 会被读成"检查过了，没问题"。
+        self.assertEqual(sorted(state), ["status", "truncated_chunks", "version_id"])
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(state["truncated_chunks"], 0)
+        build = next(job for job in self.client.get("/api/v1/import-jobs").json()["jobs"]
+                     if job["job_type"] == "build_vector_index")
+        self.assertIsNone(build["message"])
 
 
 if __name__ == "__main__":

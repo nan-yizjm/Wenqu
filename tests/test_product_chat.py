@@ -63,6 +63,27 @@ class ProductChatTests(unittest.TestCase):
         self.assertTrue(answer["index_version"].startswith("idx_"))
         self.assertEqual(answer["sources"][0]["locator"]["kind"], "markdown")
 
+    def test_evidence_window_is_eight_chunks_not_five(self):
+        """一轮问答放几个片段是实测调过的参数，不能被悄悄改回去。
+
+        这里放足够多的片段，让 5 和 8 真的能区分开。实测依据：用 5 时 dev 集
+        26 题里有 3 题的期望文档**根本不在证据里**，无从给出正确引用；加到 8
+        时这 3 题全部改善、零退化（`docs/产品检索评测-2026-09-16.md` §13.4）。
+        """
+        # 每节 520 字符，都在 800 的切片上限之内，所以一节至少一个片段；
+        # 16 节保证可用片段数远多于 8，考的是"取几个"而不是"有没有得取"。
+        sections = "\n\n".join(
+            f"## 分页 {index}\n\nPagedAttention 的第 {index} 个要点：{'填' * 480}"
+            for index in range(1, 17))
+        self.client.post("/api/v1/documents/upload", files={
+            "file": ("长笔记.md", f"# 长笔记\n\n{sections}".encode(), "text/markdown")})
+
+        final = self.events({"question": "PagedAttention 是什么？"})[-1]
+        self.assertEqual(len(final["sources"]), 8)
+        # 引用编号必须连续：缺一个，界面就会出现点不开的引用。
+        self.assertEqual([item["label"] for item in final["sources"]],
+                         [f"S{i}" for i in range(1, 9)])
+
     def test_replayed_sources_carry_the_same_evidence_as_the_live_stream(self):
         """刚答完和翻旧的必须是同一个形状。
 

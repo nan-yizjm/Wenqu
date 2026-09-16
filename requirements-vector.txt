@@ -1,6 +1,12 @@
 # 本机已验证的向量层直接依赖，不是完整传递依赖锁文件。
 # 同时支持 E5 与 CrossEncoder；模型权重由首次准备命令另行下载。
-# PyTorch 请先按自己的 Windows / CUDA / CPU 平台单独配置；
-# 本轮使用 torch 2.13.0+cu132，保留现有可用安装，不要盲目换回 CPU wheel。
+#
+# PyTorch 不在本文件里钉死，因为开发机与打包环境的要求不同：
+#   * 开发机（.venv，实验线）：可以用 CUDA wheel。本机用的是 torch 2.13.0+cu132，
+#     已经装好就别盲目换回 CPU wheel。
+#   * 打包环境（.venv-product，产品分发）：**固定 CPU wheel**，由
+#     scripts/build_product.ps1 显式指定 `torch==2.13.0 --index-url .../whl/cpu`。
+#     分发体积与显卡兼容性都要求这样，别改成 CUDA wheel。
+# 两处口径不同是故意的，不是漏改。
 numpy==2.5.2
 sentence-transformers==6.0.0

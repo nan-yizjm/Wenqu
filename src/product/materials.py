@@ -364,7 +364,10 @@ class MaterialService:
                 snapshot = self._snapshot
         current = snapshot.version_id
         if ready is not None and ready[0] == current:
-            return {"status": "ready", "version_id": current}
+            # `truncated_chunks` 是这一版索引里超出模型长度上限的片段数（恒 ≥ 0）。
+            # 索引对象常驻内存，所以这里直接读它的计数，不需要另存一份状态。
+            return {"status": "ready", "version_id": current,
+                    "truncated_chunks": int(getattr(ready[1], "truncated_chunk_count", 0))}
         if building is not None and building == current:
             return {"status": "building", "version_id": current}
         return {"status": "off", "version_id": current}
@@ -414,6 +417,12 @@ class MaterialService:
                 cache_path=self._vector_cache_path(snapshot.version_id),
                 reuse_from=self._previous_vector_index(),
             )
+            # 超过 E5 max_length 的片段会被截断编码：语义那一路只看得到前半段，
+            # 名次会失真。实验线遇到这种情况直接拒绝发布索引（`index_store.py`），
+            # 产品这里只记录并说出来——向量索引是辅助通道，为它拒绝服务会把关键词
+            # 检索一起挡掉，而实测超限占比极低：101 篇语料 2014 段里 8 段（0.40%），
+            # 56 篇纯笔记语料 980 段里 6 段（0.61%）。
+            truncated = int(getattr(index, "truncated_chunk_count", 0))
             with self._snapshot_lock:
                 current = self._snapshot
             # 这份索引对它自己那一版始终有效，所以总是记下来：`retrieve()` 和
@@ -426,8 +435,15 @@ class MaterialService:
                 current.engine.vector = index
             # 被顶掉不是出错：编码的这几分钟里用户又加了资料而已，收尾时会为
             # 新版本重排一次。报成失败会让人以为建索引本身有问题。
-            self._advance_job(job_id, message="资料已更新，这一版作废，改为为新版本建立索引。"
-                              if superseded else None)
+            if superseded:
+                message = "资料已更新，这一版作废，改为为新版本建立索引。"
+                if truncated:
+                    message += f"另有 {truncated} 个片段超出检索模型的长度上限。"
+            elif truncated:
+                message = f"{truncated} 个片段超出检索模型的长度上限，语义检索只用得到前半段。"
+            else:
+                message = None
+            self._advance_job(job_id, message=message)
             self._finish_job(job_id)
         finally:
             # 失败也要放开，否则这个版本再也不会重试。
