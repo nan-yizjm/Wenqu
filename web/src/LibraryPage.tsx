@@ -4,6 +4,7 @@ import { locatorLabel, mediaLabel } from './lib/locator'
 import { SourcePanel } from './SourcePanel'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
 import { HitMeta, Preview, RelevanceBar } from './components/HitMeta'
+import { FolderPicker } from './components/FolderPicker'
 
 export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> }) {
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -11,6 +12,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const [jobs, setJobs] = useState<ImportJob[]>([])
   const [examples, setExamples] = useState<BundledResource[]>([])
   const [folder, setFolder] = useState('')
+  const [picking, setPicking] = useState(false)
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searched, setSearched] = useState<SearchResult | null>(null)
@@ -31,10 +33,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
     const timer = window.setInterval(() => void load(), 900)
     return () => window.clearInterval(timer)
   }, [jobs])
-  const chooseFolder = async () => {
-    try { const result = await api.pickFolder(); if (result.path) setFolder(result.path) }
-    catch (e) { setMessage(e instanceof Error ? e.message : '无法打开文件夹选择器') }
-  }
+  const chooseFolder = () => setPicking(true)
   const connect = async () => {
     if (!folder.trim()) return
     setMessage('正在扫描 Markdown、PDF 与 Notebook 文件…')
@@ -112,5 +111,8 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
       </section>
     </div>
     {selected && <SourcePanel hit={selected} close={() => setSelected(null)} />}
+    {picking && <FolderPicker initial={folder.trim() || undefined}
+      onCancel={() => setPicking(false)}
+      onPick={path => { setFolder(path); setPicking(false); setMessage('') }} />}
   </div>
 }

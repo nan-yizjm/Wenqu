@@ -28,12 +28,12 @@ class ProductChatTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.captured = []
         self.paths = ProductPaths(Path(temporary.name) / "产品数据")
-        app = create_product_app(
+        self.app = create_product_app(
             self.paths, MemoryCredentialStore(),
             retrieval_model_manager=MemoryRetrievalModelManager(), material_run_inline=True,
             chat_client_factory=lambda settings: FakeStreamingClient(self.captured),
         )
-        self.client = TestClient(app, base_url="http://127.0.0.1:8765")
+        self.client = TestClient(self.app, base_url="http://127.0.0.1:8765")
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.client.post("/api/v1/documents/upload", files={"file": (
@@ -183,6 +183,64 @@ class ProductChatTests(unittest.TestCase):
             loaded = client.get(f"/api/v1/conversations/{conversation['id']}").json()
             self.assertEqual(loaded["messages"][-1]["provider"], "deepseek")
             self.assertEqual(loaded["messages"][-1]["status"], "failed")
+
+    def test_delete_conversation_removes_its_messages(self):
+        self.events({"question": "PagedAttention 是什么？"})
+        response = self.client.delete(f"/api/v1/conversations/{self.conversation['id']}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"], 2)
+        self.assertEqual(self.client.get("/api/v1/conversations").json()["conversations"], [])
+        self.assertEqual(self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").status_code, 404)
+
+    def test_delete_conversation_keeps_favorites_and_reports_how_many(self):
+        """删会话是"丢掉这段对话记录"，不是"丢掉我挑出来的结论"。
+
+        favorites 建的时候自己存了一份 question / answer 与来源快照，没有指向
+        messages 的外键，级联删不到它。这里把这个行为固定成测试，免得以后有人
+        顺手给它补个外键、把用户的收藏一起带走。
+        """
+        final = self.events({"question": "PagedAttention 是什么？"})[-1]
+        favorite = self.client.post(
+            "/api/v1/favorites", json={"message_id": final["message_id"]}).json()
+        body = self.client.delete(f"/api/v1/conversations/{self.conversation['id']}").json()
+        self.assertEqual(body["kept_favorites"], 1)
+        kept = self.client.get(f"/api/v1/favorites/{favorite['id']}").json()
+        self.assertIn("PagedAttention", kept["question"])
+
+    def test_delete_missing_conversation_is_not_found(self):
+        self.assertEqual(
+            self.client.delete("/api/v1/conversations/conv_不存在").status_code, 404)
+
+    def _pin_active_stream(self, message_id):
+        """把某个回答伪造成"正在生成"。
+
+        真跑一个不会结束的流不好做；这里直接往 _active 里挂一条属于该会话的消息，
+        考的正是"删除前会不会先查有没有在跑"。
+        """
+        chat = self.client.app.state.chat
+        with chat._active_lock:
+            chat._active[message_id] = threading.Event()
+        self.addCleanup(lambda: chat._active.pop(message_id, None))
+
+    def test_delete_is_refused_while_an_answer_is_streaming(self):
+        # 生成中途删会话，后面写 message_sources 会撞外键约束、在流里抛异常。
+        message_id = self.events({"question": "PagedAttention 是什么？"})[-1]["message_id"]
+        self._pin_active_stream(message_id)
+        response = self.client.delete(f"/api/v1/conversations/{self.conversation['id']}")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"], "conversation_busy")
+        # 拦住就得是完整的拦住，不能删一半。
+        self.assertEqual(self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").status_code, 200)
+
+    def test_a_stream_in_another_conversation_does_not_block_this_delete(self):
+        """守卫要按会话算。退化成"有任何一个流在跑就都不许删"会让界面莫名其妙。"""
+        other = self.client.post("/api/v1/conversations", json={"title": "另一个会话"}).json()
+        message_id = self.events({"question": "PagedAttention 是什么？"})[-1]["message_id"]
+        self._pin_active_stream(message_id)
+        self.assertEqual(
+            self.client.delete(f"/api/v1/conversations/{other['id']}").status_code, 200)
 
 
 if __name__ == "__main__":

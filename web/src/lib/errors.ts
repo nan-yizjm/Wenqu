@@ -5,7 +5,6 @@ const HINTS: Record<string, string> = {
   local_origin_required: '请求不是从工作台页面发出的，已被拒绝。请刷新本页重试。',
   database_recovery_required: '数据库升级没有完成。请先恢复升级前的自动备份。',
   restart_required: '需要退出并重新打开工作台才能继续。',
-  folder_picker_failed: '没能打开系统文件夹选择器。可以直接把文件夹路径粘贴到输入框。',
   unknown_setting: '当前版本不认识这个设置项，请更新到最新版本。',
   invalid_folder: '这个文件夹读不到，请确认路径存在、可读，并且里面有 Markdown 文件。',
   invalid_document: '这个文件暂时不能导入。目前支持 Markdown、PDF 与 Jupyter Notebook。',
@@ -19,6 +18,7 @@ const HINTS: Record<string, string> = {
   backup_not_found: '找不到这个备份文件。',
   document_not_found: '这份资料已经不在工作台里了，请刷新页面。',
   conversation_not_found: '这个会话已经不存在了，请新建一个会话。',
+  conversation_busy: '这个会话正在生成回答，等它结束或点「停止」之后才能删除。',
   favorite_not_found: '这条收藏已经被删除了。',
   message_not_found: '这条消息已经不存在了，请刷新页面。',
 }

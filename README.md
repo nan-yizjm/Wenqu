@@ -17,7 +17,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_product.ps1
 
 产品数据独立保存在 `%LOCALAPPDATA%\ObsidianRAG`；安装目录、开发仓库的 `.env`、旧索引和私人笔记不会被产品入口自动读取。生成仍支持本机 Ollama 与 DeepSeek，DeepSeek 密钥只保存到 Windows 凭据管理器。完整实现与故障记录见[产品阶段学习记录](docs/学习记录/README.md)。
 
-0.2.1 安装包已在开发机完成安装、覆盖升级、数据保留、卸载保留和发布包自检验收（明细见 [0.2.1 发布说明](docs/RELEASE_NOTES_0.2.1.md)；`retrieval_model.py` 的模型准备路径自 0.2.0 起未变，真实 CPU E5 准备验收沿用 0.2.0 记录）。阶段 33 的[朋友试用清单](docs/朋友试用与反馈.md)、[反馈台账](docs/试用反馈台账.md)和 GitHub Issue 模板已就绪；至少两位朋友的独立电脑试用仍是待办，不计为已完成。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
+0.2.1 安装包已在开发机完成安装、覆盖升级、数据保留、卸载保留和发布包自检验收（明细见 [0.2.1 发布说明](docs/RELEASE_NOTES_0.2.1.md)；`retrieval_model.py` 的模型准备路径自 0.2.0 起未变，真实 CPU E5 准备验收沿用 0.2.0 记录）。需要留意的是：**该安装包构建于 2026-09-15，不含 2026-09-16 的界面自适应、删除会话与应用内文件夹选择三项修复**；`dist/ObsidianRAG` 便携版已带这三项重打，是否升版本重打安装包见[改进记录第 23 节](改进记录.md)。阶段 33 的[朋友试用清单](docs/朋友试用与反馈.md)、[反馈台账](docs/试用反馈台账.md)和 GitHub Issue 模板已就绪；至少两位朋友的独立电脑试用仍是待办，不计为已完成。训练、QLoRA 和 adapter 保留为实验支线，不再决定产品主线排期。
 
 ## 历史状态：RAG 工程与小模型训练学习（2026-09-14）
 
@@ -46,7 +46,7 @@ QLoRA 完整进程耗时 82.8 秒，PyTorch 训练峰值分配约 5270 MiB，`nv
 .\.venv\Scripts\python.exe -X utf8 -m src.train_tiny_lm --generate '.\data\generated\tiny_lm_runs\20260912_151041_274119\best.pt' --prompt '小周来到'
 ```
 
-这是本机已生成、未纳入 Git 的检查点；新机器需先按阶段 15/16 准备数据和训练，不能仅克隆代码就假设权重存在。当前全量离线检查 **159 项通过**（2026-09-16 实测，12.8 秒；另有前端 `tsc -b` 零错误、39 项 vitest、设计 token 门禁）；SFT/QLoRA 与泛化入口均已在 CUDA 上实际运行并保存冻结报告，未调用远程生成 API。
+这是本机已生成、未纳入 Git 的检查点；新机器需先按阶段 15/16 准备数据和训练，不能仅克隆代码就假设权重存在。当前全量离线检查 **179 项通过**（2026-09-16 实测；另有前端 `tsc -b` 零错误、57 项 vitest、设计 token 门禁）；SFT/QLoRA 与泛化入口均已在 CUDA 上实际运行并保存冻结报告，未调用远程生成 API。
 
 前一阶段已完成 [CPU/GPU 部署实测](docs/学习记录/13-CPU与GPU部署实验.md) 和 [手写 Attention / KV Cache](docs/学习记录/14-手写Attention与KVCache.md)。部署报告将加载、生成与检索分开；张量实验验证缓存结果，并复现 mask 对齐和 view 存储问题。
 

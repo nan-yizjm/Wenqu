@@ -22,7 +22,7 @@ from .paths import ProductPaths, bundle_root
 from .retrieval_model import RetrievalModelManager, build_cpu_encoder
 from .materials import MAX_UPLOAD_BYTES, MaterialService
 from .resources import bundled_docs, bundled_examples, resolve_bundled
-from .folder_picker import pick_folder
+from .folder_browser import list_directory
 from .chat import ChatService
 from .organize import OrganizeService
 from .support import MAX_BACKUP_BYTES, SupportService
@@ -358,13 +358,15 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "invalid_document", "message": str(error)},
                                 status_code=422)
 
-    @app.post("/api/v1/system/pick-folder")
-    async def system_pick_folder():
+    @app.get("/api/v1/system/folders")
+    async def list_folders(path: str | None = Query(default=None, max_length=4096)):
+        # 只列目录、只读，不写入也不删除；路径由前端逐级点选产生，
+        # 不存在"用户提供的命令文本"这一类注入面。
         try:
-            return {"path": await asyncio.to_thread(pick_folder)}
-        except (RuntimeError, OSError) as error:
-            return JSONResponse({"error": "folder_picker_failed", "message": str(error)},
-                                status_code=500)
+            return await asyncio.to_thread(list_directory, path)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_folder", "message": str(error)},
+                                status_code=422)
 
     @app.post("/api/v1/libraries/folders")
     async def connect_folder(body: FolderBody, request: Request):
@@ -439,6 +441,17 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         except KeyError as error:
             return JSONResponse({"error": "conversation_not_found", "message": str(error.args[0])},
                                 status_code=404)
+
+    @app.delete("/api/v1/conversations/{conversation_id}")
+    async def delete_conversation(conversation_id: str, request: Request):
+        try:
+            return request.app.state.chat.delete_conversation(conversation_id)
+        except KeyError as error:
+            return JSONResponse({"error": "conversation_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except RuntimeError as error:
+            return JSONResponse({"error": "conversation_busy", "message": str(error)},
+                                status_code=409)
 
     @app.post("/api/v1/conversations/{conversation_id}/messages/stream")
     async def stream_message(conversation_id: str, body: ChatBody, request: Request):

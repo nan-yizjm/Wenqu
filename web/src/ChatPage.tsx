@@ -111,6 +111,28 @@ export function ChatPage() {
     }
   }
   const create = async () => { const item = await api.createConversation(); await loadList(); await openConversation(item.id) }
+  const remove = async (item: Conversation) => {
+    if (!window.confirm(`删除会话“${item.title}”？\n\n会话里的问答会一起删除；已收藏的回答是单独保存的，不受影响。`)) return
+    try {
+      const result = await api.deleteConversation(item.id)
+      const remaining = (await api.conversations()).conversations
+      setConversations(remaining)
+      setMessage(result.kept_favorites
+        ? `已删除“${item.title}”；另有 ${result.kept_favorites} 条收藏保留在「收藏」里。`
+        : `已删除“${item.title}”。`)
+      if (active?.id !== item.id) return
+      // 删掉的正是当前会话：切到剩下的第一个；一个都不剩就新建一个，
+      // 免得界面停在一个已经不存在的会话上。
+      controller.current?.abort()
+      setSelected(null)
+      let fallback = remaining[0]
+      if (!fallback) {
+        fallback = await api.createConversation()
+        setConversations((await api.conversations()).conversations)
+      }
+      setActive(await api.conversation(fallback.id))
+    } catch (error) { setMessage(error instanceof Error ? error.message : '删除会话失败') }
+  }
   const favorite = async (item: ChatMessage) => {
     try { await api.createFavorite(item.id); setMessage('已收藏；可在左侧“收藏”中编辑和导出。') }
     catch (error) { setMessage(error instanceof Error ? error.message : '收藏失败') }
@@ -129,7 +151,13 @@ export function ChatPage() {
   }
   return <div className={selected ? 'chat-page with-source' : 'chat-page'}>
     <section className="conversation-rail"><button className="primary new-chat" onClick={create}>＋ 新会话</button>
-      <div className="conversation-list">{conversations.map(item => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => void openConversation(item.id)}><strong>{item.title}</strong><small>{item.message_count || 0} 条消息</small></button>)}</div>
+      <div className="conversation-list">{conversations.map(item =>
+        <div key={item.id} className={`conversation-item${active?.id === item.id ? ' active' : ''}`}>
+          <button className="conversation-open" onClick={() => void openConversation(item.id)}>
+            <strong>{item.title}</strong><small>{item.message_count || 0} 条消息</small></button>
+          <button className="conversation-delete" aria-label={`删除会话 ${item.title}`}
+            title="删除这个会话" onClick={() => void remove(item)}>✕</button>
+        </div>)}</div>
     </section>
     <section className="chat-main"><header><div><span className="eyebrow">GROUNDED ANSWERS</span><h1>{active?.title || '知识问答'}</h1></div><span className="chat-note">每次回答都会重新检索当前资料</span></header>
       <div className="message-list" role="log" aria-live="polite" aria-busy={busy}>

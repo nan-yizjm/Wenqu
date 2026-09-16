@@ -36,6 +36,16 @@ export type Locator =
   | { kind: 'notebook'; cell: number; cell_type: string; start_line: number; end_line: number }
 
 export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
+/** 应用内文件夹选择器看到的一层目录。`parent` 为空说明已经是盘符/根，不能再往上。 */
+export type FolderListing = {
+  path: string
+  name: string
+  parent: string | null
+  entries: { name: string; path: string }[]
+  /** 子目录超过后端上限时为 true，界面要说明"没有列全"，不能假装这就是全部。 */
+  truncated: boolean
+  roots: { name: string; path: string }[]
+}
 export type DocumentItem = { id: string; library_id: string; relative_path: string; display_name: string; media_type: MediaType; status: string; error: string | null; current_version_id: string | null; updated_at: string; library_name: string }
 export type ImportJob = { id: string; job_type: string; status: string; total: number; completed: number; failed: number; message: string | null }
 export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: MediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[]; channels?: Record<string, number>; channel_scores?: Record<string, number>; quality_reason?: string | null }
@@ -113,7 +123,12 @@ export const api = {
   libraries: () => request<{ libraries: Library[] }>('/api/v1/libraries'),
   documents: () => request<{ documents: DocumentItem[] }>('/api/v1/documents'),
   jobs: () => request<{ jobs: ImportJob[] }>('/api/v1/import-jobs'),
-  pickFolder: () => request<{ path: string | null }>('/api/v1/system/pick-folder', { method: 'POST' }),
+  /** 应用内选择文件夹：只列子目录，不弹系统对话框。
+   *
+   * 安装版是无窗口进程，系统文件夹对话框会被创建在浏览器窗口后面（实测在 z 序上
+   * 紧排在前台窗口之后），用户看不到就等于按钮坏了。 */
+  folders: (path?: string) => request<FolderListing>(
+    `/api/v1/system/folders${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   connectFolder: (path: string) => request<{ library_id: string; job_id: string }>(
     '/api/v1/libraries/folders', { method: 'POST', body: JSON.stringify({ path }) }),
   refreshLibrary: (id: string) => request<{ job_id: string }>(
@@ -132,6 +147,9 @@ export const api = {
   createConversation: (title = '新会话') => request<Conversation>(
     '/api/v1/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   conversation: (id: string) => request<Conversation>(`/api/v1/conversations/${id}`),
+  /** 删除会话会连带删掉它的消息；收藏是独立保存的结论，不会被一起删掉。 */
+  deleteConversation: (id: string) => request<{ deleted: boolean; title: string; messages: number; kept_favorites: number }>(
+    `/api/v1/conversations/${id}`, { method: 'DELETE' }),
   streamMessage: async (
     conversationId: string,
     body: { question?: string; retry_message_id?: string; skip_guard?: boolean },

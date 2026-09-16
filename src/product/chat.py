@@ -115,6 +115,47 @@ class ChatService:
         """)
         return [dict(row) for row in rows]
 
+    def delete_conversation(self, conversation_id):
+        """删除会话及其消息。
+
+        收藏**不删**：`favorites` 在建的时候就自己存了一份 question / answer 和
+        来源快照，没有指向 messages 的外键。删会话语义上是"丢掉这段对话记录"，
+        不是"丢掉我挑出来的结论"，所以这里如实把保留下来的收藏条数报回去。
+        """
+        conversation = self.database.fetchone(
+            "SELECT title FROM conversations WHERE id=?", (conversation_id,))
+        if not conversation:
+            raise KeyError("会话不存在。")
+        if self._has_active_stream(conversation_id):
+            raise RuntimeError("这个会话正在生成回答，请先停止再删除。")
+        messages = self.database.fetchone(
+            "SELECT COUNT(*) count FROM messages WHERE conversation_id=?",
+            (conversation_id,))["count"]
+        kept = self.database.fetchone("""SELECT COUNT(*) count FROM favorites f
+            JOIN messages m ON m.id=f.message_id WHERE m.conversation_id=?""",
+            (conversation_id,))["count"]
+        # messages / message_sources / answer_feedback 都是 ON DELETE CASCADE，
+        # 并且连接上开了 PRAGMA foreign_keys=ON，删会话就够了。
+        with self.database.transaction() as connection:
+            connection.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        return {"deleted": True, "title": conversation["title"],
+                "messages": messages, "kept_favorites": kept}
+
+    def _has_active_stream(self, conversation_id):
+        """会话里还有正在跑的生成线程吗。
+
+        生成中途删会话会让后面写 message_sources 撞上外键约束、在流里抛异常，
+        所以先拦住。_active 只按 message_id 记，需要回库确认归属。
+        """
+        with self._active_lock:
+            active_ids = list(self._active)
+        if not active_ids:
+            return False
+        placeholders = ",".join("?" * len(active_ids))
+        return self.database.fetchone(
+            f"SELECT id FROM messages WHERE conversation_id=? AND id IN ({placeholders}) LIMIT 1",
+            (conversation_id, *active_ids)) is not None
+
     def validate_stream_request(self, conversation_id, retry_message_id=None):
         if not self.database.fetchone("SELECT id FROM conversations WHERE id=?", (conversation_id,)):
             raise KeyError("会话不存在。")

@@ -199,7 +199,7 @@ export default function App() {
   if (setup.recovery_required) return <Recovery setup={setup} />
   if (!setup.settings.onboarding_complete) return <Welcome setup={setup} done={reload} />
   return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">OR</div><div><strong>{setup.settings.display_name}</strong><span>个人知识工作台</span></div></div>
-    <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+    <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} title={item.label} onClick={() => setPage(item.id)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{item.label}</span></button>)}</nav>
     <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div></aside>
     <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} />
       : page === 'library' ? <LibraryPage setupReload={reload} />
