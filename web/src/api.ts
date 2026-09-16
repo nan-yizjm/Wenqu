@@ -11,7 +11,12 @@ export type ProductSettings = {
   theme: 'system' | 'light' | 'dark'
 }
 
-export type VectorIndexState = { status: 'ready' | 'building' | 'off'; version_id: string | null }
+export type VectorIndexState = {
+  status: 'ready' | 'building' | 'off'
+  version_id: string | null
+  // 索引里超出检索模型长度上限的片段数；只要索引没就绪就不上报。
+  truncated_chunks?: number
+}
 export type SetupState = {
   settings: ProductSettings
   deepseek_key_configured: boolean
@@ -44,8 +49,11 @@ export type SourceRef = Omit<SearchHit, 'score' | 'matched_tokens'> & { score?: 
 export type MessageSource = SourceRef & { label: string }
 export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[] }
 export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }
-export type FavoriteSummary = { id: string; message_id: string; title: string; note: string; question: string; answer: string; provider: string | null; model: string | null; index_version: string | null; generated_at: string | null; updated_at: string; source_count: number }
+export type FavoriteSummary = { id: string; message_id: string; title: string; note: string; question: string; answer: string; provider: string | null; model: string | null; index_version: string | null; generated_at: string | null; updated_at: string; source_count: number; tags: string[]; libraries: { id: string; name: string }[]; feedback_kind: FeedbackKind | null }
 export type Favorite = FavoriteSummary & { sources: MessageSource[] }
+/** 筛选器选项取自全部收藏（不是筛完的那一批），否则选中之后切不回去。 */
+export type FavoriteFilters = { library?: string; tag?: string; feedback?: FeedbackKind; days?: '7d' | '30d' }
+export type FavoritesView = { favorites: FavoriteSummary[]; libraries: { id: string; name: string }[]; tags: string[]; total: number }
 export type FeedbackKind = 'helpful' | 'missing' | 'citation_wrong' | 'answer_wrong'
 export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; provider?: string; model?: string; message?: string; citation_warning?: boolean; rejected?: boolean }
 
@@ -156,15 +164,28 @@ export const api = {
   },
   stopMessage: (conversationId: string, messageId: string) => request<{ stopping: boolean }>(
     `/api/v1/conversations/${conversationId}/messages/${messageId}/stop`, { method: 'POST' }),
-  favorites: () => request<{ favorites: FavoriteSummary[] }>('/api/v1/favorites'),
+  favorites: (filters: FavoriteFilters = {}) => {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value)
+    const suffix = query.size ? `?${query}` : ''
+    return request<FavoritesView>(`/api/v1/favorites${suffix}`)
+  },
   favorite: (id: string) => request<Favorite>(`/api/v1/favorites/${id}`),
   createFavorite: (messageId: string) => request<Favorite>(
     '/api/v1/favorites', { method: 'POST', body: JSON.stringify({ message_id: messageId }) }),
-  updateFavorite: (id: string, values: { title?: string; note?: string }) => request<Favorite>(
+  updateFavorite: (id: string, values: { title?: string; note?: string; tags?: string[] }) => request<Favorite>(
     `/api/v1/favorites/${id}`, { method: 'PATCH', body: JSON.stringify(values) }),
   deleteFavorite: (id: string) => request<{ deleted: boolean }>(
     `/api/v1/favorites/${id}`, { method: 'DELETE' }),
   favoriteExportUrl: (id: string) => `/api/v1/favorites/${id}/export`,
+  /** 收哪些由前端点名，所以"导出的就是眼前这些"。
+   *
+   * 路径写在 `/{favorite_id}/export` 之前才不会被它当成一条收藏的 id。 */
+  collectionExportUrl: (ids: string[], title: string) => {
+    const query = new URLSearchParams({ ids: ids.join(',') })
+    if (title) query.set('title', title)
+    return `/api/v1/favorites/collection/export?${query}`
+  },
   feedback: (messageId: string, kind: FeedbackKind, note = '') => request<{ stored_locally: boolean }>(
     '/api/v1/feedback', { method: 'POST', body: JSON.stringify({ message_id: messageId, kind, note }) }),
   backup: async () => {

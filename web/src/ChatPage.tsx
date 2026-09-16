@@ -4,13 +4,7 @@ import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
 import { HitMeta } from './components/HitMeta'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
-
-const FEEDBACK_KINDS: { kind: FeedbackKind; label: string; hint: string }[] = [
-  { kind: 'helpful', label: '有帮助', hint: '答案和引用都对' },
-  { kind: 'missing', label: '有遗漏', hint: '资料里有但没答到' },
-  { kind: 'citation_wrong', label: '引用不对', hint: '[S1] 指错了位置' },
-  { kind: 'answer_wrong', label: '回答不对', hint: '与原文不符' },
-]
+import { FEEDBACK_KINDS } from './lib/feedback'
 
 function FeedbackPanel({ saved, onSave }: {
   saved?: { kind: FeedbackKind; note: string }

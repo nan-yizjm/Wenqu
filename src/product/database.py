@@ -208,6 +208,11 @@ MIGRATIONS = {
         ALTER TABLE message_sources ADD COLUMN score_json TEXT;
         ALTER TABLE favorite_sources ADD COLUMN score_json TEXT;
     """,
+    # 收藏的标签，存成一个短字符串数组的 JSON。收藏总数是几十条的量级，筛选
+    # 在服务层过一遍内存就够，不必为它建索引。
+    7: """
+        ALTER TABLE favorites ADD COLUMN tags_json TEXT;
+    """,
 }
 
 

@@ -117,6 +117,7 @@ class FavoritePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=4000)
+    tags: list[str] | None = Field(default=None, max_length=20)
 
 
 class FeedbackBody(BaseModel):
@@ -478,8 +479,16 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                                 status_code=404)
 
     @app.get("/api/v1/favorites")
-    async def favorites(request: Request):
-        return {"favorites": request.app.state.organize.list_favorites()}
+    async def favorites(request: Request, library: str | None = Query(default=None, max_length=100),
+                        tag: str | None = Query(default=None, max_length=100),
+                        feedback: str | None = Query(default=None, max_length=40),
+                        days: str | None = Query(default=None, max_length=10)):
+        try:
+            return request.app.state.organize.list_favorites(
+                library=library, tag=tag, feedback=feedback, days=days)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_filter", "message": str(error)},
+                                status_code=422)
 
     @app.post("/api/v1/favorites")
     async def create_favorite(body: FavoriteBody, request: Request):
@@ -504,7 +513,7 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     async def update_favorite(favorite_id: str, body: FavoritePatch, request: Request):
         try:
             return request.app.state.organize.update_favorite(
-                favorite_id, body.title, body.note)
+                favorite_id, body.title, body.note, body.tags)
         except KeyError as error:
             return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
                                 status_code=404)
@@ -520,6 +529,23 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         except KeyError as error:
             return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
                                 status_code=404)
+
+    @app.get("/api/v1/favorites/collection/export")
+    async def export_collection(request: Request, ids: str = Query(default="", max_length=8000),
+                                title: str = Query(default="", max_length=100)):
+        # 收哪些由界面决定（把当前筛出来的那批 id 原样传下来），服务端不重算筛选：
+        # 这样"导出的就是眼前这些"是确定的，不必担心两次筛选之间资料又变了。
+        try:
+            path = request.app.state.organize.export_collection(
+                title, [value for value in ids.split(",") if value])
+            return FileResponse(path, media_type="text/markdown; charset=utf-8",
+                                filename=path.name)
+        except KeyError as error:
+            return JSONResponse({"error": "favorite_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "collection_unavailable", "message": str(error)},
+                                status_code=409)
 
     @app.get("/api/v1/favorites/{favorite_id}/export")
     async def export_favorite(favorite_id: str, request: Request):

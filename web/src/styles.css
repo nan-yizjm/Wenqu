@@ -84,3 +84,21 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
 .source-panel .hit-meta{padding:11px 25px 0;background:var(--accent-weak)}
 .favorite-sources .hit-meta{margin-top:6px}
 .favorite-sources .relevance{margin-top:6px}
+
+/* 收藏的标签与筛选：收藏从"一条条结论"变成"能按主题翻回来的一批"。
+   筛选器的选项来自全部收藏，所以清空筛选永远能回到完整列表。 */
+.favorite-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;padding:0 10px 14px;border-bottom:1px solid var(--border-soft);margin-bottom:14px}
+.favorite-filters label{margin:0;gap:5px;font-size:10px}
+.favorite-filters select{border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);color:var(--text);font-size:11px;padding:6px 8px;max-width:148px}
+.favorite-filters .ghost{padding:6px 9px;font-size:10px}
+.tag-cloud{display:flex;flex-wrap:wrap;gap:5px;padding:0 10px 14px}
+.tag-cloud button{border:1px solid var(--border);background:var(--surface);border-radius:20px;padding:4px 10px;font-size:10px;color:var(--text-soft)}
+.tag-cloud button.active{border-color:var(--accent-border);background:var(--accent-weak);color:var(--accent-text);font-weight:700}
+.collection-export{display:flex;align-items:center;gap:6px;padding:0 10px 16px}
+.collection-export input{flex:1;min-width:0;border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;font-size:11px;background:var(--surface);color:var(--text)}
+.collection-export .secondary{margin:0;padding:8px 10px;font-size:11px;white-space:nowrap}
+.disabled-export{border:1px solid var(--border);border-radius:9px;padding:8px 10px;font-size:11px;color:var(--text-faint);white-space:nowrap}
+.favorites-list>button .tag-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.favorites-list>button .tag-row i{font-style:normal;font-size:9px;color:var(--accent-muted);background:var(--accent-weak);border-radius:20px;padding:2px 7px}
+.favorite-form label:nth-child(3){grid-column:1/-1}
+.favorites-empty .link,.empty-body .link{border:0;background:transparent;color:var(--accent-text);font-size:12px;padding:0 4px;text-decoration:underline}
