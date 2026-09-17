@@ -49,6 +49,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -152,11 +153,7 @@ def score_strict(expected: list[str], ranked: list[str]) -> dict:
 
 
 def covers_all(text_lower: str | None, keywords: list[str]) -> bool:
-    """该文档全文是否覆盖全部期望关键词。
-
-    用子串匹配：英文关键词（`Prompt Injection`、`Model Router`）要求整串出现，
-    中文关键词（`可验证奖励`）要求连续出现。关键词里混排中英时，纯英文文档
-    注定覆盖不全——这是口径本身的限制，不是实现缺陷。
+    """底层原语：该文档全文是否覆盖全部给定关键词（子串匹配）。
 
     `text_lower` **必须是已转小写的全文**（`load_document_text` 的返回值就是这么
     给的）。这里不自己转：一篇文档最多会被拿来比对 8 次，语料规模下重复转小写
@@ -167,17 +164,67 @@ def covers_all(text_lower: str | None, keywords: list[str]) -> bool:
     return all(keyword.lower() in text_lower for keyword in keywords)
 
 
+_CJK = re.compile(r"[\u3400-\u9fff]")
+
+
+def language_groups(keywords: list[str]) -> dict[str, list[str]]:
+    """按文字系统把关键词分成中文组与拉丁组。
+
+    分组的原因：同一个概念在中文资料和英文资料里是两个词——`GRPO` 与
+    `可验证奖励`、`LLMOps` 与 `监控/审计` 讲的是同一件事。宽松口径认"任何
+    能答的文档"，就不能要求两种文字的关键词同时出现。
+    """
+    groups: dict[str, list[str]] = {"cjk": [], "latin": []}
+    for keyword in keywords:
+        key = "cjk" if _CJK.search(keyword) else "latin"
+        groups[key].append(keyword)
+    return groups
+
+
+def covers_expected(text_lower: str | None, keywords: list[str]) -> bool:
+    """宽松口径的判据：任何一组（≥2 个关键词）全部命中，即算这份文档能答题。
+
+    为什么不再要求全部关键词都出现：期望关键词是按**权威笔记（中文）**写的，
+    而宽松口径认任何能答的文档。要求全中，一份纯英文文档就永远不合格——实测
+    42 题里 24 题混排中英（dev 18、holdout 6），宽松口径测的就成了别的口径。
+
+    规则：按文字系统分组后，**任何一组的关键词全部命中即算覆盖**，但
+    **单关键字的组不能独立成立**——只出现一个术语名更可能是蹭词而不是回答
+    （`LLMOps` 单独出现不等于讲了监控与审计）。实测 24 道混排题的组大小分布是
+    (1,2)/(1,3)/(2,2)/(2,3)/(3,1)/(3,2)/(4,1)/(4,2)，没有 (1,1)，所以这条
+    护栏不会把任何题变成不可能。
+
+    这条规则**只放宽、不收紧**：任一组的并集是全集合的子集，旧口径下算对的
+    文档在新口径下仍然算对。
+
+    残留局限要如实说：混排题里少数语言组只有 1 个关键词的（dev 7 题、
+    holdout 1 题），该语言仍无法单独成立——一个英文文档讲了 benchmark 污染，
+    但评测集里只有 `Benchmark` 这一个英文关键词，剩下三个是中文，它照样不合格。
+    要解决得靠双语概念对照（把 `泄漏` 和 `contamination` 认成同一个概念），
+    那是评测集的活，不是匹配器能替的。
+    """
+    if covers_all(text_lower, keywords):
+        return True
+    if not text_lower:
+        return False
+    for group in language_groups(keywords).values():
+        if len(group) >= 2 and covers_all(text_lower, group):
+            return True
+    return False
+
+
 def score_lenient(keywords: list[str], ranked: list[str],
                   document_text: dict[str, str]) -> dict:
     """宽松口径：不论来源，最早一份"全文能回答这道题"的文档排第几位。
 
     与严格口径唯一的差别是"哪份文档算对"：严格只认 ground truth 里那一份，
-    宽松认任何覆盖了全部期望关键词的文档（Notebook、PDF、总览页都算）。
+    宽松认任何能答题的文档（Notebook、PDF、总览页都算）——判据见
+    `covers_expected`，按语言分组后任一组（≥2 个关键词）全部命中即算覆盖。
     """
     if not keywords:
         return _announce(None)
     for index, path in enumerate(ranked, 1):
-        if covers_all(document_text.get(DOCUMENT_IDS.get(path, "")), keywords):
+        if covers_expected(document_text.get(DOCUMENT_IDS.get(path, "")), keywords):
             return _announce(index)
     return _announce(None)
 
