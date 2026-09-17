@@ -26,3 +26,7 @@ output/playwright/
 build/
 dist/
 dist-installer/
+
+# Agent workspace: project memory, daily logs, probe scripts and screenshot
+# evidence. Kept on disk, deliberately not tracked as source.
+.workbuddy/
