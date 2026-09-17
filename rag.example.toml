@@ -9,6 +9,7 @@ provider = 'ollama'
 retriever = 'hybrid'
 top_k = 5
 candidate_k = 20
+rrf_k = 60
 rerank = false
 rerank_top_n = 20
 rerank_device = 'cpu'

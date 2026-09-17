@@ -64,10 +64,18 @@ class BM25Index:
         chunks: list[dict[str, str]],
         k1: float = 1.5,
         b: float = 0.75,
+        heading_repeat: int = 1,
     ) -> None:
+        if k1 <= 0:
+            raise ValueError("k1 必须为正数")
+        if not 0.0 <= b <= 1.0:
+            raise ValueError("b 必须落在 0 到 1 之间")
+        if heading_repeat < 0:
+            raise ValueError("heading_repeat 不能为负数")
         self.chunks = chunks
         self.k1 = k1
         self.b = b
+        self.heading_repeat = heading_repeat
 
         self.term_frequencies: list[Counter[str]] = []
         self.document_frequencies: Counter[str] = Counter()
@@ -78,12 +86,11 @@ class BM25Index:
         for chunk in chunks:
             self.heading_frequencies.append(Counter(tokenize(chunk["heading_path"])))
             self.text_frequencies.append(Counter(tokenize(chunk["text"])))
-            # 标题路径重复一次，作为轻量标题加权。
-            searchable_text = (
-                f"{chunk['heading_path']}\n"
-                f"{chunk['heading_path']}\n"
-                f"{chunk['text']}"
-            )
+            # 标题路径额外重复 `heading_repeat` 次，作为轻量标题加权。
+            # 默认 1 表示标题出现两次，与历史行为逐字节一致：这个参数是为单变量
+            # 实验才放开的，默认值不动。
+            searchable_text = "\n".join(
+                [chunk["heading_path"]] * (heading_repeat + 1) + [chunk["text"]])
 
             tokens = tokenize(searchable_text)
             term_frequency = Counter(tokens)

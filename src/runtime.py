@@ -27,7 +27,8 @@ class RAGRuntime:
         self.answerer = RAGAnswerer(
             path / "chunks.json", client, retrieval_method=settings.retriever,
             retrieval_top_k=settings.top_k, max_context_chars=settings.max_context_chars,
-            candidate_k=settings.candidate_k, device=settings.device, rerank=settings.rerank,
+            candidate_k=settings.candidate_k, rrf_k=settings.rrf_k,
+            device=settings.device, rerank=settings.rerank,
             rerank_top_n=settings.rerank_top_n, rerank_device=settings.rerank_device,
             context_policy=settings.context_policy)
         engine = self.answerer.engine

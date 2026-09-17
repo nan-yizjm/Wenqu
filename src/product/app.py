@@ -20,7 +20,9 @@ from .credentials import CredentialStore
 from .database import Database
 from .paths import ProductPaths, bundle_root
 from .retrieval_model import RetrievalModelManager, build_cpu_encoder
-from .materials import MAX_UPLOAD_BYTES, MaterialService
+from .materials import (
+    MAX_UPLOAD_BYTES, RETRIEVAL_PARAMETER_KEYS, RETRIEVAL_PARAMETERS, MaterialService,
+)
 from .resources import bundled_docs, bundled_examples, resolve_bundled
 from .folder_browser import list_directory
 from .chat import ChatService
@@ -31,12 +33,16 @@ from .support import MAX_BACKUP_BYTES, SupportService
 ALLOWED_SETTINGS = {
     "provider", "ollama_base_url", "ollama_model", "onboarding_complete",
     "display_name", "retrieval_mode", "deepseek_model", "theme",
+    # 检索参数（见 materials.RETRIEVAL_PARAMETERS）。界面上没有开关，只为单变量
+    # 实验开放：默认值就是产品一直以来的行为。
+    "candidate_k", "rrf_k", "bm25_k1", "bm25_b", "heading_repeat",
 }
 DEFAULT_SETTINGS = {
     "provider": "ollama", "ollama_base_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen2.5:7b", "onboarding_complete": False,
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
     "deepseek_model": "deepseek-chat", "theme": "system",
+    **{key: default for key, (default, _, _, _) in RETRIEVAL_PARAMETERS.items()},
 }
 SOURCE_MEDIA_TYPES = {
     "pdf": "application/pdf",
@@ -55,6 +61,11 @@ class SettingsPatch(BaseModel):
     retrieval_mode: str | None = None
     deepseek_model: str | None = Field(default=None, max_length=100)
     theme: str | None = None
+    candidate_k: int | None = Field(default=None, ge=1, le=200)
+    rrf_k: int | None = Field(default=None, ge=1, le=1000)
+    bm25_k1: float | None = Field(default=None, gt=0.0, le=10.0)
+    bm25_b: float | None = Field(default=None, ge=0.0, le=1.0)
+    heading_repeat: int | None = Field(default=None, ge=0, le=10)
 
     @field_validator("provider")
     @classmethod
@@ -314,6 +325,10 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "unknown_setting"}, status_code=422)
         request.app.state.database.set_settings(values)
         request.app.state.database.event("settings_updated", {"keys": sorted(values)})
+        # 检索参数只在建引擎时读一次，改完要就地换引擎；换的是同一份索引版本，
+        # 已建好的向量索引不会因此作废。非检索参数的改动不碰引擎。
+        if RETRIEVAL_PARAMETER_KEYS & set(values):
+            request.app.state.materials.reload_retrieval_settings()
         # 切到混合检索时补建向量索引；其余情况这里什么都不做。
         request.app.state.materials.ensure_vector_index()
         return {"settings": current_settings(request.app.state.database)}
@@ -424,7 +439,13 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     @app.get("/api/v1/search")
     async def search(request: Request, q: str = Query(min_length=1, max_length=1000),
                      top_k: int = Query(default=8, ge=1, le=20)):
-        return request.app.state.materials.search(q, top_k)
+        try:
+            return request.app.state.materials.search(q, top_k)
+        except ValueError as error:
+            # 候选窗口被实验性地调小到 top_k 以下时，这里会抛"要求 1 <= top_k
+            # <= candidate_k"。那是设置问题不是服务故障，不能报成 500。
+            return JSONResponse({"error": "invalid_search", "message": str(error)},
+                                status_code=422)
 
     @app.get("/api/v1/conversations")
     async def conversations(request: Request):

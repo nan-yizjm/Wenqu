@@ -27,6 +27,17 @@ MAX_CELL_OUTPUT_CHARS = 4000
 # 混合检索的候选窗口；接口把 top_k 限死在 20，正好等于这个值。
 CANDIDATE_K = 20
 RRF_K = 60
+# 检索参数：键 → (默认值, 类型, 下限, 上限)。默认值就是产品一直以来的行为，
+# 放开成设置项只为做单变量实验。`_retrieval_settings()` 只读不写，缺失或非法
+# 一律退回默认，所以"没配过"和"配坏了"都还是原来的检索结果。
+RETRIEVAL_PARAMETERS = {
+    "candidate_k": (CANDIDATE_K, int, 1, None),
+    "rrf_k": (RRF_K, int, 1, None),
+    "bm25_k1": (1.5, float, 1e-9, None),
+    "bm25_b": (0.75, float, 0.0, 1.0),
+    "heading_repeat": (1, int, 0, None),
+}
+RETRIEVAL_PARAMETER_KEYS = frozenset(RETRIEVAL_PARAMETERS)
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 MEDIA_TYPES = {".md": "markdown", ".markdown": "markdown", ".pdf": "pdf", ".ipynb": "notebook"}
 
@@ -305,13 +316,57 @@ class MaterialService:
         engine = self._build_engine(active, list(chunks))
         return SearchSnapshot(active, chunks, engine.bm25, engine)
 
+    def _retrieval_settings(self) -> dict:
+        """读出检索参数，缺失或非法一律回默认值。
+
+        这里刻意不抛异常：设置项是给人做实验用的，一个手滑写坏的值不应该让整个
+        检索直接失败。真正的校验放在接口层（`SettingsPatch`），非法值在那里就被
+        422 挡住；这一层只保证"存进去的东西再离谱也退化成默认行为"。
+        """
+        stored = self._settings_getter() or {}
+        values = {}
+        for key, (default, cast, low, high) in RETRIEVAL_PARAMETERS.items():
+            try:
+                value = cast(stored[key])
+            except (KeyError, TypeError, ValueError):
+                values[key] = default
+                continue
+            values[key] = value if value >= low and (high is None or value <= high) else default
+        return values
+
+    def reload_retrieval_settings(self):
+        """检索参数改了就地换一份引擎。
+
+        参数只在建引擎时读一次，所以改完必须换引擎才生效。这里刻意**不**走
+        `_publish_snapshot()`：那会插入一个新的索引版本，把已经建好的向量索引
+        判成"上一版"，每换一个参数都要重新编码一遍。版本号保持不变，向量索引
+        继续挂得住，单变量实验才能一条条跑下去。
+        """
+        with self._snapshot_lock:
+            snapshot = self._snapshot
+        engine = self._build_engine(snapshot.version_id, list(snapshot.chunks))
+        with self._vector_lock:
+            ready = self._vector_ready
+        if ready is not None and ready[0] == snapshot.version_id:
+            engine.vector = ready[1]
+        replacement = SearchSnapshot(snapshot.version_id, snapshot.chunks, engine.bm25, engine)
+        with self._snapshot_lock:
+            if self._snapshot is snapshot:
+                self._snapshot = replacement
+        return {"index_version": snapshot.version_id,
+                "parameters": self._retrieval_settings()}
+
     def _vector_cache_path(self, version_id: str) -> Path:
         return self.paths.indexes / version_id / "vector_index.npz"
 
     def _build_engine(self, version_id: str | None, chunks: list[dict]):
         """每个索引版本一个引擎；向量索引随后台任务挂上去，挂之前只走 BM25。"""
+        parameters = self._retrieval_settings()
         return RetrievalEngine(
-            chunks, device="cpu", candidate_k=CANDIDATE_K, rrf_k=RRF_K,
+            chunks, device="cpu",
+            candidate_k=parameters["candidate_k"], rrf_k=parameters["rrf_k"],
+            k1=parameters["bm25_k1"], b=parameters["bm25_b"],
+            heading_repeat=parameters["heading_repeat"],
             cache_path=self._vector_cache_path(version_id) if version_id else None,
         )
 

@@ -58,7 +58,8 @@ class FakeEncoder:
         return np.array([0.0, 1.0], dtype=np.float32)
 
 
-class ProductHybridTests(unittest.TestCase):
+class ProductMaterialsTestCase(unittest.TestCase):
+    """产品资料链路的公共夹具。本身不含测试，供下面的用例类继承。"""
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -70,6 +71,7 @@ class ProductHybridTests(unittest.TestCase):
             retrieval_model_manager=MemoryRetrievalModelManager(status="ready"),
             material_run_inline=True, material_encoder_factory=lambda: self.encoder,
         )
+        self.app = app
         self.client = TestClient(app, base_url="http://127.0.0.1:8765")
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -90,6 +92,8 @@ class ProductHybridTests(unittest.TestCase):
         response = self.client.patch("/api/v1/settings", json={"retrieval_mode": value})
         self.assertEqual(response.status_code, 200)
 
+
+class ProductHybridTests(ProductMaterialsTestCase):
     def test_hybrid_recalls_a_chunk_that_keyword_search_misses(self):
         """这是接通混合检索的全部意义：换个说法问，也能找到那段资料。"""
         self.upload("词法.md", "# 词法\n\n这里写的是检索词的原始表述。")
@@ -266,6 +270,79 @@ class ProductHybridTests(unittest.TestCase):
         build = next(job for job in self.client.get("/api/v1/import-jobs").json()["jobs"]
                      if job["job_type"] == "build_vector_index")
         self.assertIsNone(build["message"])
+
+
+class ProductRetrievalParameterTests(ProductMaterialsTestCase):
+    """检索参数只用于单变量实验：改得动，但默认值必须还是历史行为。"""
+
+    def engine(self):
+        return self.app.state.materials._snapshot.engine
+
+    def build_jobs(self):
+        return [job for job in self.client.get("/api/v1/import-jobs").json()["jobs"]
+                if job["job_type"] == "build_vector_index"]
+
+    def test_defaults_are_the_historical_values(self):
+        settings = self.client.get("/api/v1/settings").json()["settings"]
+        for key, expected in (("candidate_k", 20), ("rrf_k", 60), ("bm25_k1", 1.5),
+                              ("bm25_b", 0.75), ("heading_repeat", 1)):
+            self.assertEqual(settings[key], expected, key)
+
+        engine = self.engine()
+        self.assertEqual(engine.candidate_k, 20)
+        self.assertEqual(engine.rrf_k, 60)
+        self.assertEqual(engine.bm25.k1, 1.5)
+        self.assertEqual(engine.bm25.b, 0.75)
+        self.assertEqual(engine.bm25.heading_repeat, 1)
+
+    def test_a_parameter_change_reaches_the_engine(self):
+        response = self.client.patch("/api/v1/settings", json={
+            "rrf_k": 10, "bm25_b": 0.3, "bm25_k1": 2.0, "heading_repeat": 0})
+        self.assertEqual(response.status_code, 200)
+
+        engine = self.engine()
+        self.assertEqual(engine.rrf_k, 10)
+        self.assertEqual(engine.bm25.b, 0.3)
+        self.assertEqual(engine.bm25.k1, 2.0)
+        self.assertEqual(engine.bm25.heading_repeat, 0)
+
+    def test_changing_a_parameter_does_not_throw_away_the_vector_index(self):
+        """就地换引擎的目的：换参数不该让已经编码好的向量索引作废重来。"""
+        self.upload("词法.md", "# 词法\n\n这里写的是检索词的原始表述。")
+        self.upload("语义.md", f"# 语义\n\n这段话讲的是{PASSAGE_ONLY}，一个词都没重合。")
+        self.mode("hybrid")
+        self.assertEqual(self.search(QUERY_ONLY)["effective_mode"], "hybrid")
+        before = len(self.build_jobs())
+
+        self.client.patch("/api/v1/settings", json={"rrf_k": 10})
+
+        # 混合检索仍然生效，说明向量索引还挂在新的那份引擎上。
+        self.assertEqual(self.search(QUERY_ONLY)["effective_mode"], "hybrid")
+        self.assertEqual(len(self.build_jobs()), before)
+
+    def test_impossible_values_are_rejected_at_the_boundary(self):
+        for payload in ({"candidate_k": 0}, {"rrf_k": 0}, {"bm25_k1": 0},
+                        {"bm25_b": 1.5}, {"bm25_b": -0.1}, {"heading_repeat": -1}):
+            with self.subTest(**payload):
+                self.assertEqual(
+                    self.client.patch("/api/v1/settings", json=payload).status_code, 422)
+
+    def test_a_value_stored_behind_the_api_still_falls_back_to_the_default(self):
+        """有人直接改库（或旧版本写脏了）时，检索不能因此崩掉。"""
+        self.app.state.database.set_settings({"bm25_b": 5, "heading_repeat": -3})
+        self.app.state.materials.reload_retrieval_settings()
+
+        engine = self.engine()
+        self.assertEqual(engine.bm25.b, 0.75)
+        self.assertEqual(engine.bm25.heading_repeat, 1)
+
+    def test_a_small_candidate_window_says_so_instead_of_failing(self):
+        self.client.patch("/api/v1/settings", json={"candidate_k": 10})
+
+        response = self.client.get("/api/v1/search", params={"q": "PagedAttention", "top_k": 20})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"], "invalid_search")
 
 
 if __name__ == "__main__":

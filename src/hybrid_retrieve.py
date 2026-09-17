@@ -59,11 +59,14 @@ class RetrievalEngine:
         cache_path: Path | None = None, vector_index=None,
         rerank: bool = False, rerank_top_n: int = 20, reranker=None,
         rerank_device: str | None = None,
+        k1: float = 1.5, b: float = 0.75, heading_repeat: int = 1,
     ) -> None:
         if candidate_k < 1 or rrf_k < 1:
             raise ValueError("candidate_k 与 rrf_k 必须为正数")
         self.chunks = chunks
-        self.bm25 = BM25Index(chunks)
+        # k1 / b / heading_repeat 由 BM25Index 校验并持有，这里只负责透传，
+        # 让产品链路能对 BM25 做单变量实验而不改默认值。
+        self.bm25 = BM25Index(chunks, k1=k1, b=b, heading_repeat=heading_repeat)
         self.chunk_tokens = {chunk["id"]: set(frequencies) for chunk, frequencies in
                              zip(chunks, self.bm25.term_frequencies, strict=True)}
         self.vector = vector_index
@@ -165,6 +168,10 @@ def main() -> None:
     parser.add_argument("--rerank", action="store_true")
     parser.add_argument("--rerank-top-n", type=int, default=20)
     parser.add_argument("--rerank-device", choices=("cuda", "cpu"), default=None)
+    parser.add_argument("--k1", type=float, default=1.5, help="BM25 词频饱和参数")
+    parser.add_argument("--b", type=float, default=0.75, help="BM25 长度归一化强度")
+    parser.add_argument("--heading-repeat", type=int, default=1,
+                        help="标题路径在检索文本里额外重复的次数，默认 1")
     args = parser.parse_args()
     reason = static_corpus_rejection_reason(args.query)
     if reason:
@@ -175,6 +182,7 @@ def main() -> None:
     engine = RetrievalEngine(
         load_chunks(chunks_path), device=args.device,
         candidate_k=args.candidate_k, rrf_k=args.rrf_k,
+        k1=args.k1, b=args.b, heading_repeat=args.heading_repeat,
         quality_rules=not args.no_quality_rules,
         cache_path=chunks_path.parent / "vector_index.npz", rerank=args.rerank,
         rerank_top_n=args.rerank_top_n, rerank_device=args.rerank_device,

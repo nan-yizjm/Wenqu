@@ -1,16 +1,17 @@
 import unittest
 from unittest.mock import patch
 
-from src.bm25 import search_bm25
+from src.bm25 import BM25Index, search_bm25
+from src.retrieve import tokenize
 from src.hybrid_retrieve import RetrievalEngine, fuse_rankings
 from src.context import build_context
 from src.answer import has_separate_concept_coverage
 from src.compare_retrievers import summarize
 
 
-def chunk(identifier, heading="原理"):
+def chunk(identifier, heading="原理", text="PagedAttention 管理 KV Cache"):
     return {"id": identifier, "heading_path": heading, "source_file": "a.md",
-            "document_title": "笔记", "text": "PagedAttention 管理 KV Cache"}
+            "document_title": "笔记", "text": text}
 
 
 class HybridTests(unittest.TestCase):
@@ -78,3 +79,58 @@ class HybridTests(unittest.TestCase):
 
     def test_empty_denominator_is_not_zero_percent(self):
         self.assertIsNone(summarize([], 5)["ood_rejection_rate"])
+
+
+class RetrievalParameterTests(unittest.TestCase):
+    """参数化的唯一目的是做单变量实验，默认值必须与历史行为完全一致。
+
+    这里刻意不写"默认等于默认"这种空断言：标题重复的历史行为是标题出现两次，
+    所以直接按分词结果核对文档长度，公式错了才测得出。
+    """
+
+    def test_default_heading_repeat_still_puts_the_heading_in_twice(self):
+        chunks = [chunk("a"), chunk("b", heading="KV Cache 与显存")]
+        index = BM25Index(chunks)
+
+        self.assertEqual(index.heading_repeat, 1)
+        for position, item in enumerate(chunks):
+            heading = len(tokenize(item["heading_path"]))
+            text = len(tokenize(item["text"]))
+            self.assertEqual(index.document_lengths[position], heading * 2 + text)
+
+    def test_heading_repeat_zero_means_no_extra_weight_not_no_heading(self):
+        """0 表示"标题不额外加权"，标题本身仍然出现一次。
+
+        这一点容易写错预期：0 不是"把标题从检索文本里删掉"。所以这里核对的是
+        词频（1 次 vs 2 次），而不是"命中消失"。
+        """
+        chunks = [chunk("a", heading="PagedAttention 原理", text="与标题无关的正文。")]
+        plain = BM25Index(chunks, heading_repeat=0)
+        weighted = BM25Index(chunks)
+
+        heading = len(tokenize("PagedAttention 原理"))
+        text = len(tokenize("与标题无关的正文。"))
+        self.assertEqual(plain.document_lengths[0], heading + text)
+        self.assertEqual(plain.term_frequencies[0]["pagedattention"], 1)
+        self.assertEqual(weighted.term_frequencies[0]["pagedattention"], 2)
+        self.assertTrue(search_bm25("PagedAttention", chunks, plain))
+
+    def test_two_extra_repeats_are_counted_as_three_headings(self):
+        chunks = [chunk("a", heading="原理", text="正文。")]
+        index = BM25Index(chunks, heading_repeat=2)
+        heading = len(tokenize("原理"))
+        self.assertEqual(index.document_lengths[0], heading * 3 + len(tokenize("正文。")))
+
+    def test_engine_passes_the_bm25_parameters_through(self):
+        engine = RetrievalEngine([chunk("a")], k1=1.2, b=0.3, heading_repeat=0)
+
+        self.assertEqual(engine.bm25.k1, 1.2)
+        self.assertEqual(engine.bm25.b, 0.3)
+        self.assertEqual(engine.bm25.heading_repeat, 0)
+
+    def test_impossible_parameters_are_rejected(self):
+        for kwargs in ({"k1": 0}, {"k1": -1.0}, {"b": -0.1}, {"b": 1.1},
+                       {"heading_repeat": -1}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    RetrievalEngine([chunk("a")], **kwargs)

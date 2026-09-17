@@ -20,6 +20,7 @@ class Settings:
     retriever: str = "hybrid"
     top_k: int = 5
     candidate_k: int = 20
+    rrf_k: int = 60
     rerank: bool = False
     rerank_top_n: int = 20
     rerank_device: str = "cpu"
@@ -42,7 +43,7 @@ class Settings:
                 raise ValueError(f"{name} 只能为 {choices}")
         if type(self.rerank) is not bool:
             raise ValueError("rerank 必须为 true / false")
-        for name in ("max_tokens", "overlap_tokens", "top_k", "candidate_k", "rerank_top_n",
+        for name in ("max_tokens", "overlap_tokens", "top_k", "candidate_k", "rrf_k", "rerank_top_n",
                      "max_context_chars", "port", "request_timeout", "max_question_chars",
                      "max_queue_size", "queue_wait_timeout"):
             if type(getattr(self, name)) is not int:
@@ -51,6 +52,8 @@ class Settings:
             raise ValueError("要求 32 <= max_tokens <= 512，0 <= overlap_tokens < max_tokens")
         if not 1 <= self.top_k <= self.candidate_k <= 200:
             raise ValueError("要求 1 <= top_k <= candidate_k <= 200")
+        if not 1 <= self.rrf_k <= 1000:
+            raise ValueError("要求 1 <= rrf_k <= 1000")
         if not 1 <= self.rerank_top_n <= self.candidate_k:
             raise ValueError("rerank_top_n 必须在 1～candidate_k 之间")
         if self.rerank and self.rerank_top_n < self.top_k:

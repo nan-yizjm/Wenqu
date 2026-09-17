@@ -171,6 +171,7 @@ class RAGAnswerer:
         retrieval_method: str = "bm25",
         device: str = "cuda",
         candidate_k: int = 20,
+        rrf_k: int = 60,
         rerank: bool = False,
         rerank_top_n: int = 20,
         rerank_device: str | None = None,
@@ -204,6 +205,7 @@ class RAGAnswerer:
         self.chunks = load_chunks(chunks_path)
         self.engine = RetrievalEngine(
             self.chunks, device=device, candidate_k=max(candidate_k, retrieval_top_k),
+            rrf_k=rrf_k,
             cache_path=chunks_path.parent / "vector_index.npz",
             rerank=rerank, rerank_top_n=rerank_top_n, rerank_device=rerank_device,
         )
@@ -596,6 +598,7 @@ def main() -> None:
     parser.add_argument("--retriever", choices=("bm25", "vector", "hybrid"), default="bm25")
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     parser.add_argument("--candidate-k", type=int, default=20)
+    parser.add_argument("--rrf-k", type=int, default=60)
     parser.add_argument("--chunks-file", default="data/generated/chunks.json")
     parser.add_argument("--rerank", action="store_true")
     parser.add_argument("--rerank-top-n", type=int, default=20)
@@ -614,6 +617,7 @@ def main() -> None:
         retrieval_method=args.retriever,
         device=args.device,
         candidate_k=args.candidate_k,
+        rrf_k=args.rrf_k,
         rerank=args.rerank, rerank_top_n=args.rerank_top_n,
         rerank_device=args.rerank_device, context_policy=args.context_policy,
     )

@@ -48,6 +48,7 @@ def build_answerer(config_path, adapter, max_new_tokens=160, max_prompt_tokens=2
         retrieval_method=settings.retriever,
         device=settings.device,
         candidate_k=settings.candidate_k,
+        rrf_k=settings.rrf_k,
         rerank=settings.rerank,
         rerank_top_n=settings.rerank_top_n,
         rerank_device=settings.rerank_device,
