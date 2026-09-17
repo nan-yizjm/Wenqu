@@ -60,10 +60,14 @@ from fastapi.testclient import TestClient
 from src.product.app import create_product_app
 from src.product.credentials import MemoryCredentialStore
 from src.product.paths import ProductPaths
+from src.product.materials import RETRIEVAL_PARAMETERS
 from src.product.retrieval_model import MODEL_NAME, MODEL_REVISION, MemoryRetrievalModelManager
 
 MODES = ("bm25", "hybrid")
 DEFAULT_SETS = ("data/eval_set.json", "data/eval_holdout.json")
+# 每条条件开始前把五个检索参数显式写回默认值，保证条件之间互不污染。
+DEFAULT_RETRIEVAL_PARAMETERS = {
+    key: default for key, (default, _, _, _) in RETRIEVAL_PARAMETERS.items()}
 # `/api/v1/search` 的 top_k 上限是 20；重排要在同一批候选上比，所以取满。
 MAX_CANDIDATES = 20
 # 片段命中要还原成"文档相对路径"才能和 expected_source_files 比；检索结果里带了
@@ -233,17 +237,55 @@ def compact_hits(hits: list[dict]) -> list[dict]:
     } for index, hit in enumerate(hits, 1)]
 
 
+def parse_sweep(specs: list[str]) -> list[tuple[str, str, dict]]:
+    """把 `方式:键=值` 解析成 (标签, 检索方式, 设置补丁)。
+
+    写成 `hybrid:rrf_k=10` 而不是 `rrf_k=10` 是刻意的：同一个参数在不同检索方式下
+    影响不同（`rrf_k` 只有混合用得上，`b`/`heading_repeat` 主要作用在 BM25 那一路），
+    让每一项自己声明方式，报告里就不会出现"这个数是在哪条路径上得的"这种含糊。
+    """
+    entries = []
+    for spec in specs:
+        mode, separator, assignment = spec.partition(":")
+        key, equals, raw = assignment.partition("=")
+        if not separator or not equals or mode not in MODES:
+            raise SystemExit(f"无法解析的实验项：{spec}；写法应为 方式:键=值，方式取 {MODES}")
+        # 计划书里就写作 b 和 k1，这里认这两个短名，报告里仍用设置的全名。
+        key = {"b": "bm25_b", "k1": "bm25_k1"}.get(key, key)
+        if key not in RETRIEVAL_PARAMETERS:
+            raise SystemExit(f"不是可实验的检索参数：{key}；可选 {sorted(RETRIEVAL_PARAMETERS)}")
+        try:
+            value = int(raw) if raw.lstrip("-").isdigit() else float(raw)
+        except ValueError:
+            raise SystemExit(f"实验项的值不是数字：{spec}")
+        if any(existing[0] == spec for existing in entries):
+            raise SystemExit(f"实验项重复：{spec}")
+        entries.append((spec, mode, {key: value}))
+    return entries
+
+
+def build_conditions(sweep: list[tuple[str, str, dict]], rerank: bool) -> list[tuple[str, str, dict, bool]]:
+    """条件表：(标签, 检索方式, 设置补丁, 是否重排)。
+
+    基线是 bm25 / hybrid 两条；sweep 里的每一项各成一条；`--rerank` 时每条再各加
+    一份重排档。标签直接带改动内容，报告里一眼能对上。
+    """
+    base = [(mode, mode, {}, False) for mode in MODES]
+    base += [(label, mode, patch, False) for label, mode, patch in sweep]
+    if rerank:
+        base += [(f"{label}+rerank", mode, patch, True) for label, mode, patch, _ in base]
+    return base
+
+
 def evaluate_set(client, materials, name: str, items: list[dict],
                  top_k: int, candidate_k: int, reranker=None,
                  chunk_text: dict[str, str] | None = None,
-                 document_text: dict[str, str] | None = None) -> dict:
+                 document_text: dict[str, str] | None = None,
+                 sweep: list[tuple[str, str, dict]] | None = None) -> dict:
     chunk_text = chunk_text or {}
     document_text = document_text or {}
-    conditions = []
-    for mode in MODES:
-        conditions.append(f"{mode}")
-    if reranker is not None:
-        conditions = [f"{mode}{suffix}" for mode in MODES for suffix in ("", "+rerank")]
+    conditions = build_conditions(sweep or [], reranker is not None)
+    labels = [label for label, _, _, _ in conditions]
 
     rows = []
     for item in items:
@@ -251,33 +293,36 @@ def evaluate_set(client, materials, name: str, items: list[dict],
         keywords = item.get("expected_keywords") or []
         row = {"id": item["id"], "category": item["category"], "question": item["question"],
                "expected": expected, "keywords": keywords}
-        for mode in MODES:
-            client.patch("/api/v1/settings", json={"retrieval_mode": mode})
+        for label, mode, patch, wants_rerank in conditions:
+            # 每条条件都先回到默认参数再打补丁：否则上一条 sweep 改过的值会留到
+            # 下一条，单变量实验就悄悄变成多变量了。
+            client.patch("/api/v1/settings",
+                         json={"retrieval_mode": mode, **DEFAULT_RETRIEVAL_PARAMETERS, **patch})
             if mode == "hybrid":
                 prepare_hybrid(client, materials)
             hits, effective = search_candidates(client, item["question"], candidate_k)
-            row[f"{mode}_effective"] = effective
-            row[f"{mode}_hits"] = compact_hits(hits)
+            row[f"{label}_effective"] = effective
+            row[f"{label}_hits"] = compact_hits(hits)
             ranked = dedupe_paths(hits)[:top_k]
-            row[f"{mode}_ranked"] = ranked
-            row[f"{mode}"] = score_strict(expected, ranked)
-            row[f"{mode}_lenient"] = score_lenient(keywords, ranked, document_text)
-            if reranker is not None:
+            row[f"{label}_ranked"] = ranked
+            row[f"{label}"] = score_strict(expected, ranked)
+            row[f"{label}_lenient"] = score_lenient(keywords, ranked, document_text)
+            if wants_rerank and reranker is not None:
                 reordered = dedupe_paths(
                     rerank_candidates(reranker, item["question"], hits, chunk_text))[:top_k]
-                row[f"{mode}+rerank_ranked"] = reordered
-                row[f"{mode}+rerank"] = score_strict(expected, reordered)
+                row[f"{label}_ranked"] = reordered
+                row[f"{label}"] = score_strict(expected, reordered)
         rows.append(row)
 
     entry = {"set": name, "top_k": top_k, "candidate_k": candidate_k, "conditions": {}}
-    for condition in conditions:
-        base_mode = condition.split("+")[0]
-        entry["conditions"][condition] = {
-            "effective_mode": rows[0].get(f"{base_mode}_effective") if rows else None,
-            "summary": summarize(rows, condition),
-            "lenient_summary": summarize(rows, f"{condition}_lenient", require="keywords"),
+    for label in labels:
+        base_mode = label.split(":")[0].split("+")[0]
+        entry["conditions"][label] = {
+            "effective_mode": rows[0].get(f"{label}_effective") if rows else None,
+            "summary": summarize(rows, label),
+            "lenient_summary": summarize(rows, f"{label}_lenient", require="keywords"),
             "out_of_domain_zero_hit": sum(
-                1 for row in rows if not row["expected"] and not row[f"{base_mode}_ranked"]),
+                1 for row in rows if not row["expected"] and not row[f"{label}_ranked"]),
             "out_of_domain_total": sum(1 for row in rows if not row["expected"]),
         }
     entry["comparisons"] = [compare(rows, "bm25", "hybrid", "bm25 → hybrid")]
@@ -303,7 +348,8 @@ def prepare_hybrid(client, materials) -> None:
 
 
 def run(vault: Path, sets: list[Path], data_dir: Path, model_cache: Path,
-        top_k: int, candidate_k: int, rerank: bool, rubric: str) -> dict:
+        top_k: int, candidate_k: int, rerank: bool, rubric: str,
+        sweep: list[tuple[str, str, dict]] | None = None) -> dict:
     paths = ProductPaths(data_dir).ensure()
     app = create_product_app(
         paths, MemoryCredentialStore(),
@@ -314,6 +360,7 @@ def run(vault: Path, sets: list[Path], data_dir: Path, model_cache: Path,
     reranker = build_eval_reranker() if rerank else None
     result = {"vault": str(vault), "data_dir": str(data_dir), "top_k": top_k,
               "candidate_k": candidate_k, "rerank": rerank, "rubric": rubric,
+              "sweep": [label for label, _, _ in sweep or []],
               "generated_at": datetime.now(timezone.utc).isoformat(), "sets": []}
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         started = time.perf_counter()
@@ -336,7 +383,7 @@ def run(vault: Path, sets: list[Path], data_dir: Path, model_cache: Path,
             items = json.loads(path.read_text(encoding="utf-8"))
             result["sets"].append(evaluate_set(
                 client, app.state.materials, path.name, items, top_k, candidate_k,
-                reranker, chunk_text, document_text))
+                reranker, chunk_text, document_text, sweep))
     return result
 
 
@@ -422,6 +469,9 @@ def main() -> None:
     parser.add_argument("--candidate-k", type=int, default=MAX_CANDIDATES,
                         help=f"取回并参与重排的候选数（上限 {MAX_CANDIDATES}）")
     parser.add_argument("--rerank", action="store_true", help="追加本地 CrossEncoder 重排档")
+    parser.add_argument("--sweep", nargs="*", default=[],
+                        help="单变量实验项，写法 方式:键=值，可给多个；"
+                             "如 hybrid:rrf_k=10  bm25:b=0.3  bm25:heading_repeat=0")
     parser.add_argument("--rubric", choices=("strict", "lenient", "both"), default="both",
                         help="打印哪一套判对口径；两套都会算好并存进报告，这里只控输出")
     parser.add_argument("--output", default=None, help="报告落点，默认 data/generated/product_retrieval_eval_<时间戳>.json")
@@ -434,7 +484,7 @@ def main() -> None:
 
     result = run(vault, [Path(item) for item in arguments.sets], Path(arguments.data_dir),
                  Path(arguments.model_cache), arguments.top_k, candidate_k,
-                 arguments.rerank, arguments.rubric)
+                 arguments.rerank, arguments.rubric, parse_sweep(arguments.sweep))
     report(result)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
