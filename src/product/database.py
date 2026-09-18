@@ -268,6 +268,8 @@ MIGRATIONS = {
     # "当时没联网"，而我们并不知道。
     10: """
         ALTER TABLE messages ADD COLUMN web_state_json TEXT;
+        ALTER TABLE messages ADD COLUMN evidence_note TEXT;
+        ALTER TABLE artifacts ADD COLUMN evidence_note TEXT;
     """,
 }
 

@@ -39,7 +39,9 @@ import re
 import threading
 import uuid
 
-from .chat import SOURCE_PATTERN, default_chat_client, safe_error, source_record
+from .chat import (OLLAMA_CONTEXT_TOKENS, SOURCE_PATTERN, default_chat_client,
+                   evidence_budget_bytes, evidence_reduction_note, fit_evidence,
+                   safe_error, source_record)
 from .database import utc_now
 from .headless import RenderFailed, RendererUnavailable, screenshot
 from .infographic import build_model, render_html
@@ -257,11 +259,12 @@ class StudioService:
                 (artifact_id, kind, title, topic, utc_now()))
 
     def _finish(self, artifact_id: str, content: str, status: str,
-                index_version=None, error_code=None) -> None:
+                index_version=None, error_code=None, evidence_note=None) -> None:
         with self.database.transaction() as connection:
             connection.execute("""UPDATE artifacts SET content=?, status=?, index_version=?,
-                error_code=?, completed_at=? WHERE id=?""",
-                (content, status, index_version, error_code, utc_now(), artifact_id))
+                error_code=?, evidence_note=?, completed_at=? WHERE id=?""",
+                (content, status, index_version, error_code, evidence_note,
+                 utc_now(), artifact_id))
 
     def _save_sources(self, artifact_id: str, results) -> None:
         """与 `chat._sources()` 同形状入库，因此也能用 `source_record()` 读回来。"""
@@ -529,10 +532,19 @@ class StudioService:
                    "error": "retrieval_failed", "message": message, "sources": [], "detail": code}
             return
         results = retrieval["results"]
+        # 与问答同一套窗口预算（ollama 才裁）：来源、引用编号、落库的 artifact_sources
+        # 都必须按裁剪后的清单走——界面上出现一个模型从没见过的 [S12] 是撒谎。
+        evidence_note = None
+        if provider == "ollama":
+            kept, dropped = fit_evidence(results, evidence_budget_bytes(OLLAMA_CONTEXT_TOKENS))
+            if dropped:
+                evidence_note = evidence_reduction_note(
+                    len(results), len(kept), OLLAMA_CONTEXT_TOKENS)
+                results = kept
         public_sources = self._public_sources(results)
         yield {"type": "retrieval", "artifact_id": artifact_id, "query": topic,
                "index_version": retrieval["index_version"], "provider": provider,
-               "model": model, "sources": public_sources}
+               "model": model, "sources": public_sources, "evidence_note": evidence_note}
         if not results:
             text = "当前资料里没有找到与这个主题相关的片段，无法产出。可以先添加资料或换个主题。"
             self._finish(artifact_id, "", "failed", error_code="no_evidence",
@@ -567,15 +579,19 @@ class StudioService:
                 yield {"type": "token", "artifact_id": artifact_id, "text": token}
             if cancel_event.is_set():
                 self._finish(artifact_id, content, "stopped",
-                             index_version=retrieval["index_version"])
+                             index_version=retrieval["index_version"],
+                             evidence_note=evidence_note)
                 yield {"type": "stopped", "artifact_id": artifact_id, "content": content,
                        "status": "stopped", "sources": public_sources,
+                       "evidence_note": evidence_note,
                        "backlink": backlink_report(content, labels)}
                 return
             self._finish(artifact_id, content, "complete",
-                         index_version=retrieval["index_version"])
+                         index_version=retrieval["index_version"],
+                         evidence_note=evidence_note)
             yield {"type": "final", "artifact_id": artifact_id, "content": content,
                    "status": "complete", "sources": public_sources,
+                   "evidence_note": evidence_note,
                    "backlink": backlink_report(content, labels)}
         except GeneratorExit:
             cancel_event.set()
@@ -584,10 +600,11 @@ class StudioService:
         except Exception as error:
             code, message = safe_error(error)
             self._finish(artifact_id, content, "failed", error_code=code,
-                         index_version=retrieval["index_version"])
+                         index_version=retrieval["index_version"],
+                         evidence_note=evidence_note)
             yield {"type": "error", "artifact_id": artifact_id, "content": content,
                    "status": "failed", "error": code, "message": message,
-                   "sources": public_sources}
+                   "sources": public_sources, "evidence_note": evidence_note}
         finally:
             with self._active_lock:
                 self._active.pop(artifact_id, None)

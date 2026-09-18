@@ -25,6 +25,20 @@ FOLLOWUP_PATTERN = re.compile(
 # 无从给出正确引用；加到 8 时这 3 题全部改善、零退化，再往上收益落在第 8 名
 # 之后。两组 holdout 在任何窗口下都无变化。详见 `docs/产品检索评测-2026-09-16.md` §13.4。
 EVIDENCE_CHUNKS = 8
+# 本地模型的**签约窗口**。不显式传 `num_ctx` 时 Ollama 用模型默认（本机 qwen2.5:7b
+# 实测 4096），而问答与产出的证据拼装（8-12 条 × 最多 800 字符）远超这个数——
+# 超窗的后果是 Ollama **静默截断**：不报错、不说明，回答质量变差却查不出原因。
+# 所以窗口必须是产品自己签的值：8192 让多数问答证据装得下，同时 7b 模型的
+# prefill 与显存代价仍可接受。DeepSeek 的窗口大得多（64k+），不走这条预算。
+OLLAMA_CONTEXT_TOKENS = 8192
+# 证据预算之外的固定开销：系统提示、追问改写、主题一行，按 token 留余量。
+PROMPT_OVERHEAD_TOKENS = 512
+# 留给模型输出的 token。预留不足，证据会把窗口塞满，模型一个字都吐不出来。
+OUTPUT_RESERVE_TOKENS = 2048
+# token → 字节的保守折算。qwen 的分词对中文约 1 字 ≈ 1 token（UTF-8 3 字节），
+# 对英文约 4 字符 ≈ 1 token（1 字节）。按 2.5 字节/token 折算是**高估**——
+# 宁可少装一条证据，也不要把窗口又撑爆。
+BYTES_PER_TOKEN = 2.5
 # 一轮问答最多召回几条记忆。比证据片段数（8）小，因为记忆是"补充"而非主体：
 # 它要么是用户偏好、要么是此前结论，放太多会挤掉本该引用的原文。真实取值要等
 # 接入实际记忆系统后用样本调，这里先取一个保守值。
@@ -93,6 +107,9 @@ def _row_message(row, sources=()):
         # `None` 而不是 `{"status": "off"}`：没有记录和"当时确实没联网"是两件事，
         # 前者不该在界面上被说成一个结论。
         "web_state": json.loads(row["web_state_json"]) if row["web_state_json"] else None,
+        # 裁剪说明同理：`None` 表示"这条回答早于记录"或"没有发生裁剪"，两者都
+        # 不该在界面上被念成一句话。
+        "evidence_note": row["evidence_note"],
     }
 
 
@@ -103,12 +120,55 @@ def default_chat_client(settings, credentials):
     加一个 provider 只会改到其中一处，而症状是"问答能用、产出报 key 未配置"。
     """
     if settings["provider"] == "ollama":
+        # num_ctx 是产品与 Ollama 的一次签约（见 OLLAMA_CONTEXT_TOKENS 的注释）：
+        # 不传就意味着接受"模型默认 4096 + 静默截断"。
         return OllamaClient(model=settings["ollama_model"],
-                            base_url=settings["ollama_base_url"])
+                            base_url=settings["ollama_base_url"],
+                            generation_options={"num_ctx": OLLAMA_CONTEXT_TOKENS})
     key = credentials.get_deepseek()
     if not key:
         raise RuntimeError("deepseek_not_configured")
     return DeepSeekClient(model=settings.get("deepseek_model", "deepseek-chat"), api_key=key)
+
+
+def evidence_budget_bytes(context_tokens):
+    """证据能占多少字节：窗口减去固定开销与回答预留，再按保守折算换算成字节。
+
+    一个纯函数——预算跟着签约窗口走，调用方（问答 / 产出）不各自发明数字。
+    """
+    return (context_tokens - PROMPT_OVERHEAD_TOKENS - OUTPUT_RESERVE_TOKENS) * BYTES_PER_TOKEN
+
+
+def fit_evidence(results, budget_bytes):
+    """按字节预算**整条**裁证据，返回 `(kept, dropped_count)`。
+
+    两条纪律：
+
+    - **整条裁，不硬切。**字符硬切会让最后一条只剩半段，而 `[S12]` 标签还在
+      ——界面上出现一个模型只见过半句的引用。裁掉的是尾部（检索分低的在后），
+      保留的编号永远是 `S1..SN` 连续前缀。
+    - **至少保留 1 条。**预算连一条都装不下时宁可超支也不空手：半份证据仍好过
+      没有证据，"一点证据都没有"是检索层 `no_evidence` 分支的事，不是这里的事。
+
+    字节口径而非字符口径：同样的 1000 个字符，英文约 1000 字节、中文约 3000
+    字节——按字符数裁会高估中文可装条数，正好把窗口撑爆。
+    """
+    kept, dropped, used = [], 0, 0
+    for number, item in enumerate(results, 1):
+        head = f"[S{number}] {item['title']} → {item['heading_path']}\n"
+        size = len(head.encode("utf-8")) + len(str(item.get("text", "")).encode("utf-8"))
+        if kept and used + size > budget_bytes:
+            dropped = len(results) - number + 1
+            break
+        kept.append(item)
+        used += size
+    return kept, dropped
+
+
+def evidence_reduction_note(original_count, kept_count, context_tokens):
+    """裁剪发生时给用户的一句话。数字要能对上：来源面板少了几条，这里就说几条。"""
+    return (f"模型上下文窗口为 {context_tokens} token，证据从 {original_count} 条"
+            f"减到 {kept_count} 条；被减掉的条目没有参与生成。")
 
 
 def safe_error(error):
@@ -235,13 +295,14 @@ class ChatService:
             connection.execute("""
                 INSERT INTO messages(id, conversation_id, role, content, status,
                     reply_to_message_id, retry_of_message_id, provider, model, index_version,
-                    retrieval_query, error_code, web_state_json, created_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retrieval_query, error_code, web_state_json, evidence_note,
+                    created_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (message_id, conversation_id, role, content, status,
                   fields.get("reply_to_message_id"), fields.get("retry_of_message_id"),
                   fields.get("provider"), fields.get("model"), fields.get("index_version"),
                   fields.get("retrieval_query"), fields.get("error_code"),
-                  fields.get("web_state_json"), now,
+                  fields.get("web_state_json"), fields.get("evidence_note"), now,
                   now if status == "complete" else None))
             connection.execute("UPDATE conversations SET updated_at=? WHERE id=?",
                                (now, conversation_id))
@@ -423,14 +484,25 @@ class ChatService:
         results = results + web_results
         provider = settings["provider"]
         model = settings.get("ollama_model") if provider == "ollama" else settings.get("deepseek_model", "deepseek-chat")
+        # 本地模型的窗口是签约值（OLLAMA_CONTEXT_TOKENS），证据按预算整条裁，裁了
+        # 必须说出来。DeepSeek 的窗口大得多，不走这条预算——按 provider 分流，
+        # 否则要么本地撑爆、要么把远端的证据也无谓砍掉。
+        evidence_note = None
+        if provider == "ollama":
+            kept, dropped = fit_evidence(results, evidence_budget_bytes(OLLAMA_CONTEXT_TOKENS))
+            if dropped:
+                evidence_note = evidence_reduction_note(
+                    len(results), len(kept), OLLAMA_CONTEXT_TOKENS)
+                results = kept
         assistant_id = self._message(conversation_id, "assistant", "", "streaming",
             reply_to_message_id=user_message_id, retry_of_message_id=retry_of,
             provider=provider, model=model, index_version=retrieval["index_version"],
             retrieval_query=retrieval_query,
             # 和来源一起落库。联网状态在流式事件里只出现一次，不入库的话刷新界面
             # 就再也说不出"这轮到底联没联上"，等于把一次可核查的事实变成了一次
-            # 转瞬即逝的提示。
-            web_state_json=json.dumps(web_state, ensure_ascii=False))
+            # 转瞬即逝的提示。裁剪说明同理：它解释了来源面板为什么比召回上限少。
+            web_state_json=json.dumps(web_state, ensure_ascii=False),
+            evidence_note=evidence_note)
         self._sources(assistant_id, results)
         # 出的键必须与落库的完全一致：少了分数，刚答完就没有相关度、翻旧的才有；
         # 多了原始通道分，实时消息会带上重放后消失的键，前端就得处理两种形状。
@@ -440,7 +512,7 @@ class ChatService:
                           | {"label": f"S{number}"} for number, item in enumerate(results, 1)]
         yield {"type": "retrieval", "message_id": assistant_id,
                "query": retrieval_query, "index_version": retrieval["index_version"],
-               "sources": public_sources, "web": web_state}
+               "sources": public_sources, "web": web_state, "evidence_note": evidence_note}
         if not results:
             text = "当前资料中没有找到足以回答这个问题的内容。你可以换一种问法或添加相关资料。"
             self._update_assistant(assistant_id, text, "complete")

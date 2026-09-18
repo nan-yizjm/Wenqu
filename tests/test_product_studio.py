@@ -1,7 +1,8 @@
 import json
 import unittest
 
-from src.product.studio import backlink_report, build_mindmap
+from src.product.chat import OLLAMA_CONTEXT_TOKENS
+from src.product.studio import (STUDIO_EVIDENCE_CHUNKS, backlink_report, build_mindmap)
 from tests.product_harness import (build_harness, new_service, source)
 
 
@@ -341,6 +342,28 @@ class StudioApiTests(unittest.TestCase):
                          ["retrieval", "token", "token", "token", "final"])
         self.assertEqual(events[0]["sources"][0]["label"], "S1")
         self.assertEqual(final["backlink"]["missing_count"], 1)
+
+    def test_oversized_evidence_is_trimmed_and_reported_for_ollama(self):
+        """ollama 签约窗口装不下 12 条长片段：整条裁、来源只留**真正参与生成**的、
+        final 里说明裁剪。现状是 12000 字符硬切 + Ollama 按 4096 静默截断，两层
+        都不说话。"""
+        self.build()
+        body = "\n\n".join(
+            f"## 分页 {index}\n\nPagedAttention 的第 {index} 个要点：{'填' * 700}"
+            for index in range(1, 21))
+        self.client.post("/api/v1/documents/upload", files={
+            "file": ("超长笔记.md", f"# 超长笔记\n\n{body}".encode(), "text/markdown")})
+
+        events = self.stream(topic="分页 PagedAttention")
+        retrieval, final = events[0], events[-1]
+
+        self.assertLess(len(retrieval["sources"]), STUDIO_EVIDENCE_CHUNKS)
+        self.assertIn("没有参与生成", final["evidence_note"])
+        self.assertIn(str(OLLAMA_CONTEXT_TOKENS), final["evidence_note"])
+        self.assertEqual(len(final["sources"]), len(retrieval["sources"]))
+        # 落库的来源也是裁剪后的：详情页不能出现一个模型没看过的 [S12]。
+        detail = self.client.get(f"/api/v1/artifacts/{final['artifact_id']}").json()
+        self.assertEqual(len(detail["sources"]), len(retrieval["sources"]))
 
     def test_an_artifact_can_be_listed_read_and_deleted(self):
         self.build()

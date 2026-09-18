@@ -7,6 +7,10 @@ import unittest
 from fastapi.testclient import TestClient
 
 from src.product.app import create_product_app
+from src.product.chat import (BYTES_PER_TOKEN, EVIDENCE_CHUNKS, OLLAMA_CONTEXT_TOKENS,
+                              OUTPUT_RESERVE_TOKENS, PROMPT_OVERHEAD_TOKENS,
+                              default_chat_client, evidence_budget_bytes,
+                              evidence_reduction_note, fit_evidence)
 from src.product.credentials import MemoryCredentialStore
 from src.product.paths import ProductPaths
 from src.product.retrieval_model import MemoryRetrievalModelManager
@@ -241,6 +245,114 @@ class ProductChatTests(unittest.TestCase):
         self._pin_active_stream(message_id)
         self.assertEqual(
             self.client.delete(f"/api/v1/conversations/{other['id']}").status_code, 200)
+
+    def _upload_long_note(self, sections=20):
+        body = "\n\n".join(
+            f"## 分页 {index}\n\nPagedAttention 的第 {index} 个要点：{'填' * 700}"
+            for index in range(1, sections + 1))
+        self.client.post("/api/v1/documents/upload", files={
+            "file": ("超长笔记.md", f"# 超长笔记\n\n{body}".encode(), "text/markdown")})
+
+    def test_oversized_evidence_is_trimmed_and_reported(self):
+        """ollama 签约窗口 8192 token，证据按字节预算**整条**裁；丢了几条必须说出来。
+
+        现状是双层静默：这层把 9000 字符硬切，Ollama 再按模型默认 4096 截断——
+        两层都不说话，指南/回答质量变差却查不出原因。"""
+        self._upload_long_note()
+        events = self.events({"question": "PagedAttention 是什么？"})
+        retrieval = events[0]
+        # 20 条长片段远超 8192 token 窗口的证据预算：必须整条裁，不能硬切。
+        self.assertLess(len(retrieval["sources"]), EVIDENCE_CHUNKS)
+        self.assertIn("没有参与生成", retrieval["evidence_note"])
+        self.assertIn(str(OLLAMA_CONTEXT_TOKENS), retrieval["evidence_note"])
+        # 引用编号必须连续——裁掉的是尾部，不是中间。
+        labels = [item["label"] for item in retrieval["sources"]]
+        self.assertEqual(labels, [f"S{i}" for i in range(1, len(labels) + 1)])
+        # 真正发出去的证据不许超预算：这是"签约窗口"的实体含义。
+        prompt = self.captured[0][-1]["content"]
+        evidence_part = prompt.split("当前检索证据：\n", 1)[1]
+        self.assertLessEqual(
+            len(evidence_part.encode("utf-8")),
+            evidence_budget_bytes(OLLAMA_CONTEXT_TOKENS))
+
+    def test_final_and_replay_carry_the_same_trimmed_sources(self):
+        """裁剪要贯穿事件流、落库与重放：翻旧的答案看到的来源和刚答完的一致，
+        不能实时看到 5 条、翻旧的又变回 8 条。"""
+        self._upload_long_note()
+        events = self.events({"question": "PagedAttention 是什么？"})
+        final = events[-1]
+        self.assertEqual(len(final["sources"]), len(events[0]["sources"]))
+        loaded = self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").json()
+        answer = loaded["messages"][-1]
+        self.assertEqual(len(answer["sources"]), len(final["sources"]))
+        # 说明也必须从库里读回来：实时帧里有不算数，翻旧的还得说同样的话。
+        self.assertEqual(answer["evidence_note"], events[0]["evidence_note"])
+
+    def test_deepseek_path_keeps_the_full_window(self):
+        """DeepSeek 窗口大得多：没有证据被裁、也没有裁剪说明——预算只属于
+        ollama 分支，不能把 deepseek 的证据也砍了。"""
+        store = MemoryCredentialStore()
+        store.set_deepseek("sk-test-00000000")
+        self.app.state.credentials = store
+        self.client.patch("/api/v1/settings", json={"provider": "deepseek"})
+        self._upload_long_note()
+        events = self.events({"question": "PagedAttention 是什么？"})
+        self.assertEqual(len(events[0]["sources"]), EVIDENCE_CHUNKS)
+        self.assertIsNone(events[0].get("evidence_note"))
+
+
+class FitEvidenceTests(unittest.TestCase):
+    """证据按模型窗口预算整条裁。裁是减法不是切：标签要么在要么不在，
+    半条证据会让界面出现一个模型从没见过的引用编号。"""
+
+    def _results(self, count, char_count=800):
+        return [{"title": f"笔记{index}", "heading_path": "第一章 > 第二节",
+                 "text": "证" * char_count} for index in range(1, count + 1)]
+
+    def test_oversized_evidence_drops_whole_tail_chunks(self):
+        # 一条 800 个中文字 ≈ 2400+ 字节（加头行），6000 字节只装得下 2 条。
+        kept, dropped = fit_evidence(self._results(5), 6000)
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(dropped, 3)
+
+    def test_within_budget_drops_nothing(self):
+        kept, dropped = fit_evidence(self._results(5), 10 ** 9)
+        self.assertEqual((len(kept), dropped), (5, 0))
+
+    def test_budget_counts_utf8_bytes_not_characters(self):
+        """同样 1000 个"字符"，英文 ≈ 1000 字节装得下，中文 ≈ 3000 字节装不下
+        ——字符口径对中文会高估可装条数，正好把窗口撑爆。"""
+        ascii_one = [{"title": "a", "heading_path": "h", "text": "a" * 1000}]
+        cjk_one = [{"title": "一", "heading_path": "一", "text": "一" * 1000}]
+        self.assertEqual(len(fit_evidence(ascii_one, 1200)[0]), 1)
+        # 装不下也要保底 1 条：半份证据仍好过空手，空手该走 no_evidence 分支。
+        self.assertEqual(len(fit_evidence(cjk_one, 1200)[0]), 1)
+
+    def test_reduction_note_says_both_counts_and_the_window(self):
+        note = evidence_reduction_note(12, 5, OLLAMA_CONTEXT_TOKENS)
+        self.assertIn("12", note)
+        self.assertIn("5", note)
+        self.assertIn(str(OLLAMA_CONTEXT_TOKENS), note)
+        self.assertIn("没有参与生成", note)
+
+
+class OllamaContextWindowTests(unittest.TestCase):
+    def test_ollama_client_signs_a_context_window(self):
+        """不显式传 num_ctx，Ollama 就用模型默认（实测 4096），证据会被**静默**
+        截断——不报错、不说明，指南质量变差却说不出为什么。窗口必须是产品的
+        签约值，不是碰运气。"""
+        settings = {"provider": "ollama", "ollama_model": "qwen2.5:7b",
+                    "ollama_base_url": "http://127.0.0.1:11434"}
+        client = default_chat_client(settings, MemoryCredentialStore())
+        self.assertEqual(client.generation_options.get("num_ctx"), OLLAMA_CONTEXT_TOKENS)
+
+    def test_evidence_budget_leaves_room_for_the_answer(self):
+        # 预算 = 窗口 - 系统与主题裕量 - 回答预留，再折算字节。回答没有预留的话，
+        # 证据把窗口塞满，模型一个字都吐不出来或被截成半句。
+        self.assertEqual(evidence_budget_bytes(OLLAMA_CONTEXT_TOKENS),
+                         (OLLAMA_CONTEXT_TOKENS - PROMPT_OVERHEAD_TOKENS
+                          - OUTPUT_RESERVE_TOKENS) * BYTES_PER_TOKEN)
 
 
 if __name__ == "__main__":

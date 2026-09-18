@@ -135,11 +135,14 @@ class ProductFoundationTests(unittest.TestCase):
             "SELECT origin FROM message_sources WHERE label='S1'")["origin"], "note")
         self.assertEqual(database.fetchone(
             "SELECT origin FROM favorite_sources WHERE label='S1'")["origin"], "note")
-        # v10 加的是"这轮有没有出过网"。**旧行必须是 NULL（没有记录），不许被补成
-        # 'off'**：那时候这个字段还不存在，写成 'off' 等于替一条可能真的联过网的
-        # 旧回答作证。界面按 NULL 显示"没有记录"，那是当时的实情。
+        # v10 加的是"这轮有没有出过网"和"证据有没有被窗口裁掉"。**旧行必须是
+        # NULL（没有记录）**：那时候这些字段还不存在，补任何一句结论都是替历史
+        # 作证——'off' 会说"当时没联网"，非空 note 会说"当时裁过证据"，而我们
+        # 对当时的实情一无所知。
         self.assertIsNone(database.fetchone(
             "SELECT web_state_json FROM messages WHERE id='msg_a'")["web_state_json"])
+        self.assertIsNone(database.fetchone(
+            "SELECT evidence_note FROM messages WHERE id='msg_a'")["evidence_note"])
         self.assertEqual(len(list(paths.backups.glob("workspace-before-v10-*.sqlite3"))), 1)
 
     def test_a_v9_database_upgrades_without_losing_its_turns(self):
@@ -159,6 +162,8 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("""INSERT INTO messages(id, conversation_id, role, content,
                     status, created_at)
                 VALUES ('msg_b', 'conv_b', 'assistant', '旧回答正文', 'complete', 'c')""")
+            connection.execute("""INSERT INTO artifacts(id, kind, title, topic, status, created_at)
+                VALUES ('art_b', 'guide', '旧产出', '旧主题', 'failed', 'c')""")
             connection.commit()
 
         database = Database(paths)
@@ -168,6 +173,10 @@ class ProductFoundationTests(unittest.TestCase):
             "SELECT content FROM messages WHERE id='msg_b'")["content"], "旧回答正文")
         self.assertIsNone(database.fetchone(
             "SELECT web_state_json FROM messages WHERE id='msg_b'")["web_state_json"])
+        self.assertIsNone(database.fetchone(
+            "SELECT evidence_note FROM messages WHERE id='msg_b'")["evidence_note"])
+        self.assertIsNone(database.fetchone(
+            "SELECT evidence_note FROM artifacts WHERE id='art_b'")["evidence_note"])
 
     def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
