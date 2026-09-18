@@ -245,6 +245,68 @@ const clickByText = (text, scope) => `(() => {
         && /记忆已关闭/.test(memoryCard.状态行 || ''), JSON.stringify(memoryCard));
   await s.shot('accept-settings.png', 1440, 900);
 
+  // ---- 9. 设置页的联网开关，以及"开启前必须看过告知" ----
+  // 全程只切换开关、只看告知，不保存——保存会把 web_enabled 写进设置，那是在改
+  // 用户的数据。这里要验的是"点开启会不会先摆出告知"，不是"能不能真的联网"。
+  const webCard = await s.eval(`(() => {
+    const card = [...document.querySelectorAll('.card')].find(c => (c.querySelector('h3')||{}).textContent === '联网补充');
+    if (!card) return { 卡片: false };
+    const buttons = [...card.querySelectorAll('.segmented button')];
+    return { 卡片: true,
+      选项: buttons.map(b => b.textContent.trim()),
+      选中: buttons.filter(b => b.className.includes('active')).map(b => b.textContent.trim()),
+      状态行: (card.querySelector('.status-line') || {}).textContent,
+      告知可见: !!card.querySelector('.web-disclosure') };
+  })()`);
+  check('设置页有联网卡片且选项为开启/关闭', webCard.卡片 === true
+        && JSON.stringify(webCard.选项) === JSON.stringify(['开启', '关闭']), JSON.stringify(webCard));
+  check('联网默认关闭且状态行说明不会发出请求',
+        JSON.stringify(webCard.选中) === JSON.stringify(['关闭'])
+        && /不会发出任何网络请求/.test(webCard.状态行 || ''), JSON.stringify(webCard));
+  // 未确认告知之前不该先看到告知栏——它只在点「开启」之后出现。
+  check('未开启时不显示告知栏', webCard.告知可见 === false, JSON.stringify(webCard));
+
+  await s.eval(`(() => {
+    const card = [...document.querySelectorAll('.card')].find(c => (c.querySelector('h3')||{}).textContent === '联网补充');
+    const b = [...card.querySelectorAll('.segmented button')].find(x => x.textContent.trim() === '开启');
+    if (b) b.click();
+  })()`);
+  await sleep(500);
+  const disclosure = await s.eval(`(() => {
+    const box = document.querySelector('.web-disclosure');
+    if (!box) return { 可见: false };
+    const card = box.closest('.card');
+    const buttons = [...card.querySelectorAll('.segmented button')];
+    return { 可见: true, 文字: box.textContent,
+      仍选中: buttons.filter(b => b.className.includes('active')).map(b => b.textContent.trim()) };
+  })()`);
+  check('点「开启」先摆出告知栏', disclosure.可见 === true, JSON.stringify(disclosure));
+  // 告知必须把"发什么"和"不发什么"都说清，只说一句"会联网"等于没说。
+  check('告知写明只发问题本身、不发笔记正文',
+        /问题本身/.test(disclosure.文字 || '') && /不会发送/.test(disclosure.文字 || '')
+        && /笔记正文/.test(disclosure.文字 || ''), JSON.stringify(disclosure));
+  // 还没确认，开关不能自己变成打开——否则用户点保存会撞上后端的 422，而他并不
+  // 知道自己在确认什么。
+  check('未确认前开关不跳到开启', JSON.stringify(disclosure.仍选中) === JSON.stringify(['关闭']),
+        JSON.stringify(disclosure));
+  // 告知栏在设置页下方，截图前先滚到它——否则截图里看不到这次验收到底看见了什么。
+  await s.eval(`(() => {
+    const box = document.querySelector('.web-disclosure');
+    if (box) box.scrollIntoView({ block: 'center' });
+  })()`);
+  await sleep(400);
+  await s.shot('accept-settings-web.png', 1440, 900);
+
+  // 撤回这一步的界面变化：点「取消」，回到出厂状态（全程没有保存，所以库里没变）。
+  await s.eval(`(() => {
+    const box = document.querySelector('.web-disclosure');
+    if (!box) return;
+    const b = [...box.querySelectorAll('button')].find(x => x.textContent.trim() === '取消');
+    if (b) b.click();
+  })()`);
+  await sleep(300);
+  check('取消后告知栏收起', await s.eval(`!document.querySelector('.web-disclosure')`) === true, '');
+
   const errors = s.consoleErrors;
   check('页面无未捕获异常', errors.length === 0, errors.slice(0, 3).join(' | '));
 
