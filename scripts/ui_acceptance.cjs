@@ -373,6 +373,85 @@ const clickByText = (text, scope) => `(() => {
   check('思维导图不显示命中率卡片', outcome.命中率卡片 === false, JSON.stringify(outcome));
   await s.shot('accept-studio-mindmap.png', 1440, 900);
 
+  // ---- 11. 信息图导出：点一下，要么出一张真图，要么给出 HTML 退路 ----
+  // 导出器对指南和思维导图都成立，所以复用上一步刚生成的那份产出——这一步于是也不
+  // 依赖本机有没有配置生成模型，验收在任何机器上都能跑。
+  //
+  // 判据落在「点完之后页面上真的多出一张能加载的图」：信息图曾经的风险正是
+  // 「组件测试全绿、按钮点下去什么也没发生」，只有真点真加载才抓得到。
+  // 上一步明确失败（资料库为空）时没有产出可导，跳过这一段而不是误判为通过。
+  if (outcome.导图树) {
+    await s.eval(`(() => {
+      const b = document.querySelector('[data-testid="infographic-export"]');
+      if (b) b.scrollIntoView({ block: 'center' });
+    })()`);
+    await sleep(300);
+    const clicked = await s.eval(`(() => {
+      const b = document.querySelector('[data-testid="infographic-export"]');
+      if (!b) return 'no-button';
+      b.click(); return 'ok';
+    })()`);
+    check('产出详情里有「导出信息图」按钮', clicked === 'ok', clicked);
+
+    // 渲染要起一次真浏览器、再把 PNG 取回来，秒级；给它 20 秒。
+    let info = { 图: false, 图已加载: false, 降级: false };
+    for (let i = 0; i < 40; i++) {
+      info = await s.eval(`(() => {
+        const img = document.querySelector('[data-testid="infographic-image"]');
+        const degraded = document.querySelector('[data-testid="infographic-degraded"]');
+        return {
+          图: !!img,
+          图已加载: !!img && img.complete && img.naturalWidth > 0,
+          图宽: img ? img.naturalWidth : 0,
+          图高: img ? img.naturalHeight : 0,
+          降级: !!degraded,
+          耗时: (document.querySelector('[data-testid="infographic-milliseconds"]') || {}).textContent || '',
+          有下载链接: !!document.querySelector('[data-testid="infographic-download"]'),
+          尺寸不符警告: document.querySelectorAll('.studio-infographic .error').length,
+          说明: degraded ? degraded.textContent : '',
+        };
+      })()`);
+      if ((info.图 && info.图已加载) || info.降级) break;
+      await sleep(500);
+    }
+    // 两种结果都算通过：本机没有 Edge/Chrome 时正确行为是降级并留一份 HTML 给用户，
+    // 而不是让整条验收挂掉。"什么都不发生"才不算。
+    check('信息图要么出图、要么给出 HTML 退路',
+          (info.图 && info.图已加载) || info.降级, JSON.stringify(info));
+
+    if (info.图 && info.图已加载) {
+      // 浏览器解出了尺寸，说明这张图是真的被取回并解码了，不是个坏掉的 <img>。
+      check('出的是真图（浏览器解出了尺寸）', info.图宽 > 0 && info.图高 > 0,
+            `${info.图宽}×${info.图高}`);
+      check('界面上如实写出渲染耗时',
+            /毫秒/.test(info.耗时) && Number(info.耗时.replace(/\D/g, '')) > 0, info.耗时);
+      check('出图后给出下载入口', info.有下载链接 === true, '');
+      // 版面高度是算出来的：截图的窗口尺寸给多少就该出多少像素。不符时页面会自己
+      // 挂一条警告——验收要求它不出现，因为出警告意味着排版和预期已经对不上了。
+      check('图片尺寸与版面算术一致（页面没挂尺寸警告）',
+            info.尺寸不符警告 === 0, `警告数=${info.尺寸不符警告}`);
+      // 内联那张图验的是读图路由，这里再验一次带 Content-Disposition 的下载路由。
+      const download = await s.eval(`(async () => {
+        const a = document.querySelector('[data-testid="infographic-download"]');
+        if (!a) return { 状态: 0 };
+        const r = await fetch(a.getAttribute('href'));
+        const blob = await r.blob();
+        return { 状态: r.status, 类型: r.headers.get('content-type') || '', 大小: blob.size };
+      })()`);
+      check('下载链接能取回一张 PNG', download.状态 === 200
+            && String(download.类型).includes('image/png') && download.大小 > 1000,
+            JSON.stringify(download));
+    } else if (info.降级) {
+      // 浏览器不可用不是功能故障：HTML 已经导出，用户手里有退路。要验的是页面把
+      // 「为什么」和「怎么办」都说清楚了，并且指得出那份 HTML 在哪。
+      check('降级时说明了原因并给出 HTML 退路',
+            /没能渲染成图片/.test(info.说明) && /HTML/.test(info.说明)
+            && /浏览器/.test(info.说明), JSON.stringify(info.说明));
+      check('降级时不显示一张不存在的图', info.图 === false, '');
+    }
+    await s.shot('accept-studio-infographic.png', 1440, 900);
+  }
+
   // 收尾：把自己造出来的那条记录删掉。删除会弹原生 confirm，而无头 Chrome 下它会
   // 阻塞脚本求值，所以先把确认短路掉——这是测试钩子，不是被测行为。
   const listed = await s.eval(`document.querySelectorAll('.studio-list button').length`);

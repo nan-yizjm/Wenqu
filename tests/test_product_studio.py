@@ -1,23 +1,8 @@
 import json
-from pathlib import Path
-import tempfile
 import unittest
 
-from fastapi.testclient import TestClient
-
-from src.product.app import create_product_app, current_settings
-from src.product.credentials import MemoryCredentialStore
-from src.product.paths import ProductPaths
-from src.product.retrieval_model import MemoryRetrievalModelManager
-from src.product.studio import StudioService, backlink_report, build_mindmap
-
-
-def source(number, title, heading_path, text="正文"):
-    """一条与 `materials.retrieve()` 同形的来源，用来单测纯函数。"""
-    return {"chunk_id": f"c{number}", "document_id": f"d{number}", "version_id": f"v{number}",
-            "title": title, "media_type": "markdown", "heading_path": heading_path,
-            "locator": {"kind": "chunk"}, "preview": text, "text": text,
-            "score": 1.0, "matched_tokens": [], "channels": {}}
+from src.product.studio import backlink_report, build_mindmap
+from tests.product_harness import (build_harness, new_service, source)
 
 
 class BacklinkReportTests(unittest.TestCase):
@@ -146,60 +131,6 @@ class MindmapTests(unittest.TestCase):
         self.assertIn("·", mermaid)
 
 
-DEFAULT_GUIDE_CHUNKS = ("分页管理 KV Cache [S1]。", "\n显存碎片减少 [S1]。",
-                        "\n这句没有来源。")
-
-
-class FakeGuideClient:
-    """按 token 吐出一篇指南，用来在没有模型的情况下测量回链。
-
-    默认三句里有一句不带来源，所以"命中率 2/3"这个断言是真的在被算出来的；
-    传 `chunks=()` 就得到一篇空产出，用来测失败路径。
-    """
-
-    def __init__(self, captured, chunks=None):
-        self.captured = captured
-        self.chunks = list(DEFAULT_GUIDE_CHUNKS if chunks is None else chunks)
-
-    def stream_chat(self, messages, cancel_event=None):
-        self.captured.append(messages)
-        yield from self.chunks
-
-
-def build_harness(test_case, upload=True, client_chunks=None):
-    """建一个带假模型的应用，返回 `(client, service, captured)`。
-
-    服务层测试与 API 层测试共用这一个搭建过程：分成两份的话，"API 测试里的应用"
-    会慢慢长成和"服务测试里的应用"不一样的东西，而它们本该是同一个。
-    """
-    temporary = tempfile.TemporaryDirectory()
-    test_case.addCleanup(temporary.cleanup)
-    captured = []
-    paths = ProductPaths(Path(temporary.name) / "产品数据")
-
-    def factory(settings):
-        return FakeGuideClient(captured, client_chunks)
-
-    app = create_product_app(
-        paths, MemoryCredentialStore(),
-        retrieval_model_manager=MemoryRetrievalModelManager(), material_run_inline=True,
-        chat_client_factory=factory,
-    )
-    client = TestClient(app, base_url="http://127.0.0.1:8765")
-    client.__enter__()
-    test_case.addCleanup(client.__exit__, None, None, None)
-    if upload:
-        client.post("/api/v1/documents/upload", files={"file": (
-            "推理.md",
-            "# 推理\n\n## PagedAttention\n\n分页管理 KV Cache，减少显存碎片。".encode(),
-            "text/markdown")})
-    service = StudioService(
-        app.state.database, app.state.materials,
-        lambda: current_settings(app.state.database), MemoryCredentialStore(),
-        client_factory=factory)
-    return client, service, captured, app
-
-
 class StudioServiceTests(unittest.TestCase):
     def build(self, upload=True, client_chunks=None):
         client, service, captured, app = build_harness(self, upload, client_chunks)
@@ -305,8 +236,7 @@ class StudioServiceTests(unittest.TestCase):
         service = self.build()
         self.service._create("art_stuck", "guide", "旧主题", "旧主题")
 
-        StudioService(self.app.state.database, self.app.state.materials,
-                      lambda: current_settings(self.app.state.database), MemoryCredentialStore())
+        new_service(self.app)
 
         self.assertEqual(service.get_artifact("art_stuck")["status"], "stopped")
         self.assertEqual(service.get_artifact("art_stuck")["error_code"], "application_restarted")
