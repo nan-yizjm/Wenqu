@@ -244,11 +244,34 @@ class OrganizeService:
                 connection.execute(f"UPDATE favorites SET {', '.join(fields)} WHERE id=?", values)
         return self._favorite(favorite_id)
 
-    def delete_favorite(self, favorite_id):
+    def delete_favorites(self, favorite_ids):
+        """批量删除收藏：一次事务。
+
+        收藏是**副本**：`favorites` 自己存了 question / answer 与来源快照，没有
+        指向 `messages` 的外键。所以删掉收藏不影响原来的会话，反过来也一样——
+        界面上那句"不影响原会话"就是在说这件事。
+
+        `favorite_sources` 是 ON DELETE CASCADE，删主表就够（连接上开了外键）。
+        """
+        deleted, skipped = 0, []
         with self.database.transaction() as connection:
-            cursor = connection.execute("DELETE FROM favorites WHERE id=?", (favorite_id,))
-        if not cursor.rowcount:
+            for favorite_id in favorite_ids:
+                row = connection.execute("SELECT title FROM favorites WHERE id=?",
+                                         (favorite_id,)).fetchone()
+                if not row:
+                    skipped.append({"id": favorite_id, "label": None,
+                                    "code": "not_found", "reason": "收藏不存在。"})
+                    continue
+                connection.execute("DELETE FROM favorites WHERE id=?", (favorite_id,))
+                deleted += 1
+        return {"deleted": deleted, "skipped": skipped}
+
+    def delete_favorite(self, favorite_id):
+        """单条删除：保留原来的 404 语义。"""
+        result = self.delete_favorites([favorite_id])
+        if not result["deleted"]:
             raise KeyError("收藏不存在。")
+        return result
 
     def save_feedback(self, message_id, kind, note=""):
         if kind not in FEEDBACK_KINDS:

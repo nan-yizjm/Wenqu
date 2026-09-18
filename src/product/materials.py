@@ -821,15 +821,45 @@ class MaterialService:
                     removed_at=NULL, updated_at=? WHERE id=?
             """, (warning, digest, version_id, now, document_id))
 
-    def remove_document(self, document_id: str):
-        row = self.database.fetchone("SELECT id FROM documents WHERE id=? AND removed_at IS NULL",
-                                     (document_id,))
-        if not row:
-            raise KeyError("资料不存在。")
+    def remove_documents(self, document_ids):
+        """批量移除资料：一次事务，**一次**快照发布。
+
+        逐条调 `remove_document` 也能删掉同样多的东西，但每一条都会重建一次检索
+        快照（`_publish_snapshot` 会插入一个新的索引版本、重算全部片段）。选 30
+        篇就是 30 次重建——这不只是慢：中途每一次，界面上正在看的那次检索都会
+        换一个版本号。
+
+        找不到的条目不会静默跳过，而是进 `skipped` 如实报回去。
+
+        注意"移除"对**文件夹来源**的资料是暂时的：它的行还在、文件还在你的磁盘
+        上，所以下次刷新资料库会因为文件仍在而被重新导入（`_import_folder_file`
+        里 `removed_at` 会被清掉）。这一点由界面上的确认文案如实说明，不要在这里
+        假装它是永久删除。
+        """
+        deleted, skipped, now = 0, [], utc_now()
         with self.database.transaction() as connection:
-            connection.execute("UPDATE documents SET status='removed', removed_at=?, updated_at=? WHERE id=?",
-                               (utc_now(), utc_now(), document_id))
-        self._publish_snapshot()
+            for document_id in document_ids:
+                row = connection.execute(
+                    "SELECT display_name FROM documents WHERE id=? AND removed_at IS NULL",
+                    (document_id,)).fetchone()
+                if not row:
+                    skipped.append({"id": document_id, "label": None,
+                                    "code": "not_found", "reason": "资料不存在。"})
+                    continue
+                connection.execute(
+                    "UPDATE documents SET status='removed', removed_at=?, updated_at=? WHERE id=?",
+                    (now, now, document_id))
+                deleted += 1
+        if deleted:
+            self._publish_snapshot()
+        return {"deleted": deleted, "skipped": skipped}
+
+    def remove_document(self, document_id: str):
+        """单条移除：保留原来的 404 语义（找不到要报错，而不是"删了 0 条"）。"""
+        result = self.remove_documents([document_id])
+        if not result["deleted"]:
+            raise KeyError("资料不存在。")
+        return result
 
     def retry_document(self, document_id: str):
         row = self.database.fetchone(

@@ -315,22 +315,57 @@ class StudioService:
             record["backlink"] = backlink_report(row["content"], labels)
         return record
 
-    def delete_artifact(self, artifact_id: str) -> dict:
-        row = self.database.fetchone("SELECT title FROM artifacts WHERE id=?", (artifact_id,))
-        if not row:
-            raise KeyError("产出不存在。")
+    def delete_artifacts(self, artifact_ids) -> dict:
+        """批量删除产出：一次事务，导出物跟着走。
+
+        正在生成的那几份**跳过**并如实报进 `skipped`，不连同删除：生成线程随后
+        还会往 `artifact_sources` 里写行，主表被删掉会让它撞上外键约束、在那个
+        还没结束的流里抛异常。跳过的条目带着标题回去，界面才能说出是哪一份。
+
+        导出物（PNG / HTML / 渲染记录）删掉几个就报几个——`unlink(missing_ok=True)`
+        会把"文件本来就不在"也算成一次删除，那样报出来的数字就没法核实了。
+        """
+        deleted, files, skipped = 0, 0, []
         with self._active_lock:
-            active = artifact_id in self._active
-        if active:
-            raise RuntimeError("这份产出还在生成，请先停止再删除。")
-        # artifact_sources 是 ON DELETE CASCADE，删主表就够（连接上开了外键）。
-        with self.database.transaction() as connection:
-            connection.execute("DELETE FROM artifacts WHERE id=?", (artifact_id,))
-        # 导出物跟着走：产出没了却在 exports 里留一张图，用户点开只会觉得是幽灵文件。
-        # 删文件是尽力而为——`exports/` 本来就还没有清理策略，这里失败不该影响删除结果。
-        for path in self._infographic_paths(row["title"], artifact_id).values():
-            path.unlink(missing_ok=True)
-        return {"deleted": True}
+            active = set(self._active)
+        doomed = []
+        for artifact_id in artifact_ids:
+            row = self.database.fetchone("SELECT title FROM artifacts WHERE id=?", (artifact_id,))
+            if not row:
+                skipped.append({"id": artifact_id, "label": None,
+                                "code": "not_found", "reason": "产出不存在。"})
+                continue
+            if artifact_id in active:
+                skipped.append({"id": artifact_id, "label": row["title"], "code": "busy",
+                                "reason": "这份产出还在生成，请先停止再删除。"})
+                continue
+            doomed.append((artifact_id, row["title"]))
+        if doomed:
+            # artifact_sources 是 ON DELETE CASCADE，删主表就够（连接上开了外键）。
+            with self.database.transaction() as connection:
+                for artifact_id, _title in doomed:
+                    connection.execute("DELETE FROM artifacts WHERE id=?", (artifact_id,))
+            deleted = len(doomed)
+            # 删文件是尽力而为：`exports/` 本来就还没有清理策略，这里失败不该让
+            # 已经删掉的记录显示成没删成。
+            for artifact_id, title in doomed:
+                for path in self._infographic_paths(title, artifact_id).values():
+                    try:
+                        path.unlink()
+                    except OSError:
+                        continue
+                    files += 1
+        return {"deleted": deleted, "skipped": skipped, "files_removed": files}
+
+    def delete_artifact(self, artifact_id: str) -> dict:
+        """单条删除：保留原来的 404 /"还在生成"语义。"""
+        result = self.delete_artifacts([artifact_id])
+        if result["deleted"]:
+            return {"deleted": True}
+        skipped = result["skipped"][0]
+        if skipped["code"] == "busy":
+            raise RuntimeError(skipped["reason"])
+        raise KeyError("产出不存在。")
 
     def stop(self, artifact_id: str) -> dict:
         with self._active_lock:

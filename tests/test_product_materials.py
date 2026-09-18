@@ -101,6 +101,79 @@ class ProductMaterialTests(unittest.TestCase):
         self.assertEqual(self.client.get(
             "/api/v1/documents/not-a-document/versions/not-a-version/file").status_code, 404)
 
+    def test_batch_removal_publishes_one_snapshot_and_reports_the_missing(self):
+        """批量移除 = 一次事务 + **一次**快照；混进的坏 id 如实回来，不静默消失。
+
+        逐条调单选接口每篇都会重建一次检索快照（多插一行 index_versions），
+        选中 30 篇就是 30 次重建。批量接口的全部意义就在这个数字只涨 1。
+        """
+        ids = []
+        for name in ("第一篇", "第二篇"):
+            uploaded = self.client.post("/api/v1/documents/upload", files={"file": (
+                f"{name}.md", f"# {name}\n\n{name}的内容足够被检索到。".encode("utf-8"),
+                "text/markdown")})
+            self.assertEqual(uploaded.status_code, 200)
+            ids.append(uploaded.json()["document_id"])
+        database = self.client.app.state.database
+        versions_before = database.fetchone("SELECT COUNT(*) AS n FROM index_versions")["n"]
+
+        result = self.client.post("/api/v1/documents/delete", json={"ids": ids + ["ghost-id"]}).json()
+
+        self.assertEqual(result["deleted"], 2)
+        self.assertEqual(result["skipped"], [
+            {"id": "ghost-id", "label": None, "code": "not_found", "reason": "资料不存在。"}])
+        self.assertEqual(database.fetchone("SELECT COUNT(*) AS n FROM index_versions")["n"],
+                         versions_before + 1)
+        self.assertEqual(self.client.get("/api/v1/search", params={"q": "足够被检索"}).json()["results"], [])
+
+    def test_duplicate_ids_are_collapsed_not_counted_twice(self):
+        """同一个 id 出现两次只算一次：第二条只会撞上 not_found，那份 skipped 是噪音。"""
+        uploaded = self.client.post("/api/v1/documents/upload", files={"file": (
+            "重复.md", "# 重复\n\n只删一次。".encode("utf-8"), "text/markdown")})
+        document_id = uploaded.json()["document_id"]
+
+        result = self.client.post("/api/v1/documents/delete",
+                                  json={"ids": [document_id, document_id]}).json()
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(result["skipped"], [])
+
+    def test_batch_delete_rejects_empty_and_oversized_selections(self):
+        """空请求回 200 会把一次没执行的删除显示成"已完成"；超量多半是调用方算错了。
+
+        响应用的是产品统一的 422 形状（error + fields），不是 FastAPI 默认的 detail。
+        """
+        empty = self.client.post("/api/v1/documents/delete", json={"ids": []})
+        self.assertEqual(empty.status_code, 422)
+        self.assertEqual(empty.json()["error"], "invalid_request")
+        oversized = self.client.post("/api/v1/documents/delete",
+                                     json={"ids": [f"id-{n}" for n in range(501)]})
+        self.assertEqual(oversized.status_code, 422)
+        self.assertEqual(oversized.json()["fields"][0]["type"], "too_long")
+
+    def test_removing_folder_documents_is_reversed_by_the_next_refresh(self):
+        """文件夹来源的"移除"是暂时的：文件还在磁盘上，刷新资料库它就回来了。
+
+        这不是缺陷而是事实，界面的确认文案必须照实说。这条测试把它钉住，
+        免得哪天文案先写成了"永久删除"而行为不是。
+        """
+        folder = self.root / "批量资料"
+        folder.mkdir()
+        (folder / "笔记.md").write_text("# 笔记\n\n被移除后随刷新回来的内容。", encoding="utf-8")
+        library = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)}).json()
+        documents = self.client.get("/api/v1/documents").json()["documents"]
+        self.assertEqual([d["status"] for d in documents], ["ready"])
+
+        result = self.client.post("/api/v1/documents/delete",
+                                  json={"ids": [documents[0]["id"]]}).json()
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(self.client.get("/api/v1/documents").json()["documents"], [])
+
+        self.client.post(f"/api/v1/libraries/{library['library_id']}/refresh")
+        refreshed = self.client.get("/api/v1/documents").json()["documents"]
+        self.assertEqual([d["status"] for d in refreshed], ["ready"])
+        self.assertEqual(refreshed[0]["display_name"], "笔记.md")
+
     def test_text_pdf_keeps_page_and_scanned_pdf_fails_clearly(self):
         valid = self.client.post(
             "/api/v1/documents/upload",

@@ -59,6 +59,12 @@ SOURCE_MEDIA_TYPES = {
     "markdown": "text/markdown; charset=utf-8",
     "notebook": "application/x-ipynb+json",
 }
+# 一次批量删除最多接受多少条。这不是分页：界面上"全选"选中几百条是正常用法，
+# 但"一次删掉几千条"多半是调用方算错了 id 列表。界限写在接口上，越界时把实际
+# 数字一起报出来——只说"太多了"等于让调用方自己去猜。
+MAX_SELECTION = 500
+# 单个 id 的长度上限。请求体本身没有大小限制，放开这一条就等于允许 500 个长字符串。
+MAX_SELECTED_ID = 100
 
 
 class SettingsPatch(BaseModel):
@@ -159,6 +165,30 @@ class MigrationRecoveryBody(BaseModel):
 class ResourceImportBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
+
+
+class BatchDeleteBody(BaseModel):
+    """批量删除的请求体。三个列表（资料 / 收藏 / 产出）共用这一个形状。
+
+    字段就叫 `ids`，资源写在路径里（`/documents/delete` 等）。三个形状几乎相同
+    的模型只会带来三处各写一遍的去重与限长，而那种地方迟早会有一处不一样。
+
+    `min_length=1` 把"空选择"挡在业务层之前：空请求回 200 会让界面把一次根本
+    没执行的删除显示成"已完成"。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=MAX_SELECTION)
+
+    @field_validator("ids")
+    @classmethod
+    def ids_are_short_and_unique(cls, value):
+        for item in value:
+            if len(item) > MAX_SELECTED_ID:
+                raise ValueError(f"id 过长（上限 {MAX_SELECTED_ID} 个字符）：{item[:20]}…")
+        # 去重：同一个 id 第二次必然报"不存在"，那条 skipped 只是噪音。保持出现
+        # 顺序，`deleted` 的数字才对得上界面上看到的那几条。
+        return list(dict.fromkeys(value))
 
 
 class ArtifactBody(BaseModel):
@@ -513,6 +543,16 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         finally:
             await file.close()
 
+    @app.post("/api/v1/documents/delete")
+    async def remove_documents(body: BatchDeleteBody, request: Request):
+        """一次移除多篇资料。
+
+        逐条调 `DELETE /api/v1/documents/{id}` 也能删掉同样多的东西，但每一条都会
+        重建一次检索快照。走这一个入口，界面上的"选中 30 篇一起移除"才是一次
+        事务、一次快照。
+        """
+        return request.app.state.materials.remove_documents(body.ids)
+
     @app.delete("/api/v1/documents/{document_id}")
     async def remove_document(document_id: str, request: Request):
         try:
@@ -656,6 +696,10 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "invalid_favorite", "message": str(error)},
                                 status_code=422)
 
+    @app.post("/api/v1/favorites/delete")
+    async def delete_favorites(body: BatchDeleteBody, request: Request):
+        return request.app.state.organize.delete_favorites(body.ids)
+
     @app.delete("/api/v1/favorites/{favorite_id}")
     async def delete_favorite(favorite_id: str, request: Request):
         try:
@@ -749,6 +793,16 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         except KeyError as error:
             return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
                                 status_code=404)
+
+    @app.post("/api/v1/artifacts/delete")
+    async def delete_artifacts(body: BatchDeleteBody, request: Request):
+        """一次删掉多份产出，导出的图片跟着走。
+
+        正在生成的那几份会被**跳过**并在 `skipped` 里说明原因，而不是连同删除：
+        生成线程随后还会往来源表里写行，删掉主表会让它撞上外键约束、在流里抛
+        异常（与单条删除拦住"还在生成"同一个理由）。
+        """
+        return request.app.state.studio.delete_artifacts(body.ids)
 
     @app.delete("/api/v1/artifacts/{artifact_id}")
     async def delete_artifact(artifact_id: str, request: Request):

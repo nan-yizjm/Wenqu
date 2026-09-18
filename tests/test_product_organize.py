@@ -104,6 +104,20 @@ class ProductOrganizeTests(unittest.TestCase):
         return self.client.post(
             "/api/v1/favorites", json={"message_id": message_id or self.message_id}).json()
 
+    def test_batch_favorite_deletion_reports_each_missing_id(self):
+        """批量删收藏 = 一次事务；坏 id 一条一条如实回来，不吞也不猜。"""
+        first = self._favorite()
+        second = self._favorite(self._ask("RAG 在线流程是什么？"))
+        self.assertEqual(len(self.client.get("/api/v1/favorites").json()["favorites"]), 2)
+
+        result = self.client.post("/api/v1/favorites/delete",
+                                  json={"ids": [first["id"], second["id"], "ghost"]}).json()
+
+        self.assertEqual(result["deleted"], 2)
+        self.assertEqual(result["skipped"], [
+            {"id": "ghost", "label": None, "code": "not_found", "reason": "收藏不存在。"}])
+        self.assertEqual(self.client.get("/api/v1/favorites").json()["favorites"], [])
+
     def test_favorite_tags_are_normalized_and_can_be_cleared(self):
         """标签是用户自己造的检索维度，空白和重复必须在这里收干净。
 

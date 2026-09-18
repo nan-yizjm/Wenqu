@@ -251,6 +251,64 @@ class StudioServiceTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             service.get_artifact(artifact_id)
 
+    def test_batch_deletion_skips_the_running_one_and_counts_files(self):
+        """批量删产出：正在生成的跳过（不能让生成线程撞外键），文件删几个报几个。
+
+        `files_removed` 数的是**真删掉的文件**：`unlink(missing_ok=True)` 会把
+        "文件本来就不在"也算一次，那样报出来的数字就没法核实了。
+        """
+        service = self.build()
+        artifact_id = self.events()[-1]["artifact_id"]
+        title = service.get_artifact(artifact_id)["title"]
+        png = service._infographic_paths(title, artifact_id)["png"]
+        png.write_bytes(b"png")
+        # "还在生成" = 记录存在 + 在 _active 里（值是 cancel 事件，占位 None 即可）。
+        # 只塞 _active 不建记录的话，它会先撞上 not_found，根本轮不到 busy 分支。
+        self.service._create("art-busy", "guide", "主题", "主题")
+        service._active["art-busy"] = None
+
+        result = service.delete_artifacts([artifact_id, "art-busy", "art-ghost"])
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(result["files_removed"], 1)
+        self.assertFalse(png.exists())
+        skipped = {item["id"]: item for item in result["skipped"]}
+        self.assertEqual(set(skipped), {"art-busy", "art-ghost"})
+        self.assertEqual(skipped["art-busy"]["code"], "busy")
+        self.assertEqual(skipped["art-busy"]["label"], "主题")
+        self.assertIn("还在生成", skipped["art-busy"]["reason"])
+        self.assertEqual(skipped["art-ghost"]["code"], "not_found")
+        # 数据库里只剩那份"还在生成"的产出
+        self.assertEqual([a["id"] for a in service.list_artifacts()], ["art-busy"])
+
+    def test_single_deletion_still_refuses_a_running_artifact(self):
+        """单选接口的"还在生成"语义不变：报 RuntimeError 而不是悄悄跳过。"""
+        service = self.build()
+        self.service._create("art-busy", "guide", "主题", "主题")
+        service._active["art-busy"] = None
+
+        with self.assertRaises(RuntimeError):
+            service.delete_artifact("art-busy")
+        self.assertEqual([a["id"] for a in service.list_artifacts()], ["art-busy"])
+
+    def test_batch_deletion_of_a_running_artifact_via_the_api_reports_busy(self):
+        """走 API 时 busy 不该变成 500：正常 200 + skipped。
+
+        harness 里 service 与 app.state.studio 是两个实例（各有自己的 _active），
+        所以"正在生成"必须塞到**路由真正用的那个**实例上。
+        """
+        self.build()
+        self.service._create("art-busy", "guide", "主题", "主题")
+        self.client.app.state.studio._active["art-busy"] = None
+
+        response = self.client.post("/api/v1/artifacts/delete",
+                                    json={"ids": ["art-busy", "art-ghost"]})
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(result["deleted"], 0)
+        self.assertEqual({item["code"] for item in result["skipped"]}, {"busy", "not_found"})
+
     def test_an_empty_topic_is_refused_before_anything_is_written(self):
         service = self.build()
 
