@@ -3,12 +3,14 @@ import { api, type Diagnostics, type ProductSettings, type ResourcesIndex, type 
 import { LibraryPage } from './LibraryPage'
 import { ChatPage } from './ChatPage'
 import { FavoritesPage } from './FavoritesPage'
+import { StudioPage } from './StudioPage'
 import { applyTheme, THEME_OPTIONS, watchSystemTheme } from './lib/theme'
 
-type Page = 'library' | 'chat' | 'favorites' | 'settings'
+type Page = 'library' | 'chat' | 'studio' | 'favorites' | 'settings'
 const nav: { id: Page; icon: string; label: string }[] = [
   { id: 'library', icon: '▤', label: '资料库' },
   { id: 'chat', icon: '✦', label: '知识问答' },
+  { id: 'studio', icon: '❖', label: '产出' },
   { id: 'favorites', icon: '☆', label: '收藏' },
   { id: 'settings', icon: '⚙', label: '设置' },
 ]
@@ -259,6 +261,7 @@ export default function App() {
     <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div></aside>
     <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} />
       : page === 'library' ? <LibraryPage setupReload={reload} />
-      : page === 'chat' ? <ChatPage /> : <FavoritesPage />}</main>
+      : page === 'chat' ? <ChatPage />
+      : page === 'studio' ? <StudioPage /> : <FavoritesPage />}</main>
   </div>
 }

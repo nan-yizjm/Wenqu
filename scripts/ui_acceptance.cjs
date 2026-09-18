@@ -307,6 +307,86 @@ const clickByText = (text, scope) => `(() => {
   await sleep(300);
   check('取消后告知栏收起', await s.eval(`!document.querySelector('.web-disclosure')`) === true, '');
 
+  // ---- 10. 产出页：表单、诚实分数，以及能自己清理 ----
+  // 这一段会**真的生成一份思维导图**（会写一条产出记录），所以最后一步把它删掉，
+  // 让跑完之后库里和跑之前一样。选思维导图是因为它零模型调用，不依赖本机有没有
+  // 配置生成模型——这样这条验收在任何机器上都能跑。
+  await s.eval(`(() => { const b=[...document.querySelectorAll('nav button')].find(x=>x.textContent.includes('产出')); if(b) b.click(); })()`);
+  await sleep(1800);
+  const studio = await s.eval(`(() => ({
+    页面: !!document.querySelector('.studio-page'),
+    主题输入: !!document.querySelector('.studio-form input'),
+    类型选项: [...document.querySelectorAll('.studio-form .segmented button')].map(b=>b.textContent.trim()),
+    有生成按钮: [...document.querySelectorAll('.studio-form button')].some(b=>b.textContent.trim()==='开始生成'),
+  }))()`);
+  check('产出页可打开且表单齐备', studio.页面 === true && studio.主题输入 === true
+        && studio.有生成按钮 === true, JSON.stringify(studio));
+  check('产出类型只有指南与思维导图',
+        JSON.stringify(studio.类型选项) === JSON.stringify(['学习指南', '思维导图']),
+        JSON.stringify(studio));
+  await s.shot('accept-studio.png', 1440, 900);
+
+  // 空主题不该开工：既不该发请求，也不该留下一条空记录。
+  await s.eval(clickByText('开始生成', '.studio-form'));
+  await sleep(500);
+  check('空主题被拦下并给了明确说法',
+        await s.eval(`[...document.querySelectorAll('.studio-actions .hint')]
+          .some(x => x.textContent.includes('请先填一个主题'))`) === true, '');
+
+  // 主题取库里第一份可用资料的标题：这样思维导图一定会命中片段，走到"建树"那条
+  // 分支。用一个库里没有的词只能测到失败路径——失败路径也要能过，但那是另一条。
+  const docTopic = await s.eval(`(async () => {
+    const list = await (await fetch('/api/v1/documents')).json();
+    const ready = (list.documents || []).find(x => x.status === 'ready');
+    return ready ? ready.display_name.replace(/\\.md$/i, '') : '知识工作台';
+  })()`);
+  // React 受控输入要走过原生 setter，直接改 value 不会触发 onChange。
+  await s.eval(`(() => {
+    const input = document.querySelector('.studio-form input');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, ${JSON.stringify(docTopic)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await s.eval(clickByText('思维导图', '.studio-form'));
+  await sleep(300);
+  const chosenKind = await s.eval(`(() => {
+    const b = [...document.querySelectorAll('.studio-form .segmented button')].find(x => x.className.includes('active'));
+    return b ? b.textContent.trim() : '';
+  })()`);
+  check('可以切到思维导图', chosenKind === '思维导图', chosenKind);
+
+  await s.eval(clickByText('开始生成', '.studio-form'));
+  await sleep(3500);
+  const outcome = await s.eval(`(() => ({
+    导图树: !!document.querySelector('[data-testid="mindmap-view"]'),
+    节点数: document.querySelectorAll('[data-testid="mindmap-node"]').length,
+    命中率卡片: !!document.querySelector('[data-testid="backlink-report"]'),
+    说明: (document.querySelector('.studio-notice') || {}).textContent || '',
+  }))()`);
+  // 资料库为空时正确行为是明确失败，而不是产出一份空导图——两种情况都算通过，
+  // 但"什么都不发生"不算。
+  check('思维导图要么建出树、要么明确说明失败',
+        outcome.导图树 ? outcome.节点数 > 0 : /没有找到|失败/.test(outcome.说明),
+        JSON.stringify(outcome));
+  // 这一条是这一页最重要的界面承诺：导图的覆盖是构造出来的，绝不能和指南的命中率
+  // 并排显示（一个必然接近 1 的数字会让人以为两者可比）。
+  check('思维导图不显示命中率卡片', outcome.命中率卡片 === false, JSON.stringify(outcome));
+  await s.shot('accept-studio-mindmap.png', 1440, 900);
+
+  // 收尾：把自己造出来的那条记录删掉。删除会弹原生 confirm，而无头 Chrome 下它会
+  // 阻塞脚本求值，所以先把确认短路掉——这是测试钩子，不是被测行为。
+  const listed = await s.eval(`document.querySelectorAll('.studio-list button').length`);
+  if (listed > 0) {
+    await s.eval(`window.confirm = () => true`);
+    await s.eval(`(() => { const b = document.querySelector('.studio-list button'); if (b) b.click(); })()`);
+    await sleep(1200);
+    await s.eval(clickByText('删除', '.studio-detail-head'));
+    await sleep(1500);
+    const remaining = await s.eval(`document.querySelectorAll('.studio-list button').length`);
+    check('产出页删得掉自己生成的记录（跑完不留痕迹）', remaining === listed - 1,
+          `${listed} -> ${remaining}`);
+  }
+
   const errors = s.consoleErrors;
   check('页面无未捕获异常', errors.length === 0, errors.slice(0, 3).join(' | '));
 

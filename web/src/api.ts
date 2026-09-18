@@ -92,6 +92,85 @@ export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final'
 
 export type BundledResource = { name: string; size: number; modified_at: string }
 export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResource[] }
+
+// ---------------------------------------------------------------------------
+// Studio 产出
+// ---------------------------------------------------------------------------
+
+export type ArtifactKind = 'guide' | 'mindmap'
+export type ArtifactStatus = 'running' | 'complete' | 'stopped' | 'failed'
+/**
+ * 回链报告：**产出功能唯一的诚实分数**。
+ *
+ * `hit_rate` 在"一句断言都没有"时是 `null` 而不是 1——空产出没有"全部带来源"
+ * 这回事，显示成满分就是数字说谎。引用了不存在编号的行同时计入 `missing_count`
+ * 与 `invalid_labels`：它比缺来源更隐蔽，因为它看起来像有来源。
+ */
+export type BacklinkReport = {
+  assertions: number
+  with_source: number
+  hit_rate: number | null
+  cited_labels: string[]
+  invalid_labels: string[]
+  missing_count: number
+  missing: { line: number; text: string }[]
+}
+/** 思维导图节点。`sources` 是片段编号：每个节点都能点回原文。 */
+export type MindmapNode = {
+  id: string
+  label: string
+  level: number
+  sources: string[]
+  children: MindmapNode[]
+}
+/**
+ * 思维导图。**刻意没有 `hit_rate`**：节点是拿片段自身的标题层级建的，覆盖率必然
+ * 接近 1，把它和指南的命中率并排显示会让人以为两者可比。
+ */
+export type Mindmap = {
+  topic: string
+  tree: MindmapNode
+  node_count: number
+  linked_chunks: number
+  coverage_note: string
+  /** 仅供复制到 Obsidian 用；产品自身不渲染 Mermaid（前端没有渲染器）。 */
+  mermaid: string
+}
+export type ArtifactSummary = {
+  id: string
+  kind: ArtifactKind
+  title: string
+  topic: string
+  status: ArtifactStatus
+  index_version: string | null
+  error_code: string | null
+  created_at: string
+  completed_at: string | null
+  content_length: number
+}
+/** `backlink` 只在指南上有，`mindmap` 只在导图上有——两者不会同时出现。 */
+export type Artifact = ArtifactSummary & {
+  content: string
+  sources: MessageSource[]
+  backlink?: BacklinkReport
+  mindmap?: Mindmap | null
+}
+export type ArtifactStreamEvent = {
+  type: 'retrieval' | 'token' | 'final' | 'stopped' | 'error'
+  artifact_id: string
+  text?: string
+  content?: string
+  status?: ArtifactStatus
+  sources?: MessageSource[]
+  backlink?: BacklinkReport
+  mindmap?: Mindmap
+  error?: string
+  message?: string
+  query?: string
+  index_version?: string | null
+  provider?: string
+  model?: string
+}
 /**
  * 记忆接缝的运行状态。`items` 单独可为 null：条目数要问提供者才拿得到，
  * 第三方实现抛异常时后端只把类型名放进 `error`，不让整个诊断接口失败。
@@ -121,6 +200,8 @@ export type WebDiagnostics = {
   enabled?: boolean
   disclosure_acknowledged?: boolean
 }
+/** 产出的运行状态：按状态数个数，好区分"还没生成完"和"生成失败了"。 */
+export type StudioDiagnostics = { available: boolean; by_status?: Record<string, number> }
 export type Diagnostics = {
   product_version: string
   python: string
@@ -130,6 +211,7 @@ export type Diagnostics = {
   credentials: { deepseek_configured: boolean }
   memory: MemoryDiagnostics
   web: WebDiagnostics
+  studio: StudioDiagnostics
   runtime: { status: string; detail: string | null }
   retrieval_model: RetrievalModelState
 }
@@ -158,6 +240,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(describeFailure(response.status, await response.json().catch(() => null)))
   }
   return response.json() as Promise<T>
+}
+
+/**
+ * 逐行读 NDJSON 流。
+ *
+ * 抽出来是因为问答与产出用的是同一种流格式。两处各写一份解析的话，将来改缓冲或
+ * 分帧只会改到一处，症状是其中一边偶发地丢事件、或者拿半个 JSON 去 parse。
+ * 收尾那段（`buffer.trim()`）不是多余的：服务端最后一行可能没有换行符。
+ */
+async function readNdjson<T>(response: Response, onEvent: (event: T) => void): Promise<void> {
+  if (!response.ok || !response.body) {
+    throw new Error(describeFailure(response.status, await response.json().catch(() => null)))
+  }
+  const reader = response.body.getReader(); const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n'); buffer = lines.pop() || ''
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line) as T)
+    if (done) break
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer) as T)
 }
 
 export const api = {
@@ -220,19 +325,32 @@ export const api = {
       if (reason instanceof DOMException && reason.name === 'AbortError') throw reason
       throw new Error(OFFLINE_HINT)
     }
-    if (!response.ok || !response.body) {
-      throw new Error(describeFailure(response.status, await response.json().catch(() => null)))
+    await readNdjson<StreamEvent>(response, onEvent)
+  },
+  artifacts: () => request<{ artifacts: ArtifactSummary[] }>('/api/v1/artifacts'),
+  artifact: (id: string) => request<Artifact>(`/api/v1/artifacts/${id}`),
+  deleteArtifact: (id: string) => request<{ deleted: boolean }>(
+    `/api/v1/artifacts/${id}`, { method: 'DELETE' }),
+  /** 停止生成。与问答一样，停止后已写出的部分会保留为 `stopped`，不丢内容。 */
+  stopArtifact: (id: string) => request<{ stopping: boolean }>(
+    `/api/v1/artifacts/${id}/stop`, { method: 'POST' }),
+  streamArtifact: async (
+    topic: string,
+    kind: ArtifactKind,
+    onEvent: (event: ArtifactStreamEvent) => void,
+    signal: AbortSignal,
+  ) => {
+    let response: Response
+    try {
+      response = await fetch('/api/v1/artifacts/stream', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, kind }), signal,
+      })
+    } catch (reason) {
+      if (reason instanceof DOMException && reason.name === 'AbortError') throw reason
+      throw new Error(OFFLINE_HINT)
     }
-    const reader = response.body.getReader(); const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      buffer += decoder.decode(value, { stream: !done })
-      const lines = buffer.split('\n'); buffer = lines.pop() || ''
-      for (const line of lines) if (line.trim()) onEvent(JSON.parse(line) as StreamEvent)
-      if (done) break
-    }
-    if (buffer.trim()) onEvent(JSON.parse(buffer) as StreamEvent)
+    await readNdjson<ArtifactStreamEvent>(response, onEvent)
   },
   stopMessage: (conversationId: string, messageId: string) => request<{ stopping: boolean }>(
     `/api/v1/conversations/${conversationId}/messages/${messageId}/stop`, { method: 'POST' }),
