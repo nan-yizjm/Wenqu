@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { api, type Favorite, type FavoriteFilters, type FavoritesView, type FeedbackKind, type MessageSource } from './api'
+import { api, type Favorite, type FavoriteFilters, type FavoriteSummary, type FavoritesView, type FeedbackKind, type MessageSource } from './api'
 import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
 import { HitMeta, RelevanceBar } from './components/HitMeta'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
+import { BatchDeleteBar, useSelection } from './components/BatchDelete'
 import { FEEDBACK_KINDS } from './lib/feedback'
 
 const RANGES: { value: NonNullable<FavoriteFilters['days']>; label: string }[] = [
@@ -21,6 +22,8 @@ export function FavoritesPage() {
   const [tagText, setTagText] = useState(''); const [collection, setCollection] = useState('')
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [selecting, setSelecting] = useState(false)
+  const selection = useSelection()
   const favorites = view?.favorites ?? []
   const narrowed = view ? view.favorites.length !== view.total : false
   const filtering = Object.values(filters).some(Boolean)
@@ -45,10 +48,19 @@ export function FavoritesPage() {
     } catch (error) { setMessage(error instanceof Error ? error.message : '保存失败') }
   }
   const remove = async () => { if (!active || !window.confirm(`删除收藏“${active.title}”？`)) return; await api.deleteFavorite(active.id); setActive(null); setSource(null); await load() }
+  const exitSelecting = () => { setSelecting(false); selection.clear() }
+  const favoriteRow = (item: FavoriteSummary) => <button className={active?.id === item.id ? 'active' : ''}
+    onClick={() => selecting ? selection.toggle(item.id) : void choose(item.id)}>
+    <strong>{item.title}</strong>
+    <small>{item.source_count} 个来源 · {item.provider || '未知模型'}</small>
+    {item.tags.length > 0 && <span className="tag-row">{item.tags.map(tag => <i key={tag}>{tag}</i>)}</span>}
+  </button>
   const filter = (patch: FavoriteFilters) => setFilters({ ...filters, ...patch })
   return <div className={source ? 'favorites-page with-source' : 'favorites-page'}>
     <section className="favorites-list"><header><span className="eyebrow">SAVED KNOWLEDGE</span><h1>收藏</h1>
-      <p>{favorites.length} 条可导出结论{narrowed ? `（共 ${view?.total} 条）` : ''}</p></header>
+      <p>{favorites.length} 条可导出结论{narrowed ? `（共 ${view?.total} 条）` : ''}</p>
+      {view && view.total > 0 && !selecting && <button className="ghost" onClick={() => setSelecting(true)}>批量选择</button>}
+      </header>
       {view && view.total > 0 && <div className="favorite-filters">
         <label>资料库<select value={filters.library || ''} onChange={event => filter({ library: event.target.value || undefined })}>
           <option value="">全部</option>
@@ -74,11 +86,24 @@ export function FavoritesPage() {
       {favorites.length === 0 ? <div className="favorites-empty">
         {narrowed ? <>没有符合筛选的收藏。<button className="link" onClick={() => setFilters({})}>清除筛选</button></>
           : '在知识问答中收藏带来源的完整回答。'}</div>
-        : favorites.map(item => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => void choose(item.id)}>
-          <strong>{item.title}</strong>
-          <small>{item.source_count} 个来源 · {item.provider || '未知模型'}</small>
-          {item.tags.length > 0 && <span className="tag-row">{item.tags.map(tag => <i key={tag}>{tag}</i>)}</span>}
-        </button>)}</section>
+        : favorites.map(item => selecting
+          ? <div key={item.id} className={`favorite-item${selection.isSelected(item.id) ? ' batch-selected' : ''}`}>
+              <input type="checkbox" checked={selection.isSelected(item.id)} onChange={() => selection.toggle(item.id)} />
+              {favoriteRow(item)}
+            </div>
+          : <div key={item.id} className="favorite-item">{favoriteRow(item)}</div>)}
+      {selecting && favorites.length > 0 && <BatchDeleteBar
+        ids={[...selection.selected]}
+        allIds={favorites.map(item => item.id)}
+        allSelected={selection.selected.size > 0 && selection.selected.size === favorites.length}
+        onToggleAll={() => selection.selected.size === favorites.length
+          ? selection.clear() : selection.setAll(favorites.map(item => item.id))}
+        heading={`删除 ${selection.selected.size} 条收藏？`}
+        lines={['收藏是副本，删除后不影响原会话与原回答。']}
+        onCancel={exitSelecting}
+        onConfirm={ids => api.deleteFavorites(ids)}
+        onDone={async () => { exitSelecting(); await load() }} />}
+      </section>
     <section className="favorite-detail">{!loaded ? <div className="detail-skeleton"><SkeletonLines count={6} /></div>
       : !active ? (narrowed ? <EmptyState glyph="☆" title="筛选后没有可显示的收藏" tall>
         <p>当前筛选条件下没有收藏；清掉筛选就能看到全部。</p>

@@ -99,6 +99,14 @@ export type BundledResource = { name: string; size: number; modified_at: string 
 export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResource[] }
 
 // ---------------------------------------------------------------------------
+// 批量删除
+// ---------------------------------------------------------------------------
+
+/** 服务端拒绝删除的那一条。`label` 是给界面看的名字，拿不到时用 id 兜底。 */
+export type BatchSkip = { id: string; label: string | null; code: 'not_found' | 'busy'; reason: string }
+export type BatchResult = { deleted: number; skipped: BatchSkip[]; files_removed?: number }
+
+// ---------------------------------------------------------------------------
 // Studio 产出
 // ---------------------------------------------------------------------------
 
@@ -339,6 +347,9 @@ export const api = {
   upload: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ document_id: string; job_id: string }>(
     '/api/v1/documents/upload', { method: 'POST', body }) },
   removeDocument: (id: string) => request<{ removed: boolean }>(`/api/v1/documents/${id}`, { method: 'DELETE' }),
+  /** 批量移除。走专门入口而不是循环单选：服务端一次事务 + 只发布一次检索快照。 */
+  removeDocuments: (ids: string[]) => request<BatchResult>(
+    '/api/v1/documents/delete', { method: 'POST', body: JSON.stringify({ ids }) }),
   retryDocument: (id: string) => request<{ job_id: string }>(`/api/v1/documents/${id}/retry`, { method: 'POST' }),
   search: (query: string) => request<SearchResult>(
     `/api/v1/search?q=${encodeURIComponent(query)}`),
@@ -375,6 +386,9 @@ export const api = {
   artifact: (id: string) => request<Artifact>(`/api/v1/artifacts/${id}`),
   deleteArtifact: (id: string) => request<{ deleted: boolean }>(
     `/api/v1/artifacts/${id}`, { method: 'DELETE' }),
+  /** 批量删除产出。正在生成的会进 `skipped`（code=busy），不会连着删。 */
+  deleteArtifacts: (ids: string[]) => request<BatchResult>(
+    '/api/v1/artifacts/delete', { method: 'POST', body: JSON.stringify({ ids }) }),
   /** 停止生成。与问答一样，停止后已写出的部分会保留为 `stopped`，不丢内容。 */
   stopArtifact: (id: string) => request<{ stopping: boolean }>(
     `/api/v1/artifacts/${id}/stop`, { method: 'POST' }),
@@ -424,6 +438,8 @@ export const api = {
     `/api/v1/favorites/${id}`, { method: 'PATCH', body: JSON.stringify(values) }),
   deleteFavorite: (id: string) => request<{ deleted: boolean }>(
     `/api/v1/favorites/${id}`, { method: 'DELETE' }),
+  deleteFavorites: (ids: string[]) => request<BatchResult>(
+    '/api/v1/favorites/delete', { method: 'POST', body: JSON.stringify({ ids }) }),
   favoriteExportUrl: (id: string) => `/api/v1/favorites/${id}/export`,
   /** 收哪些由前端点名，所以"导出的就是眼前这些"。
    *

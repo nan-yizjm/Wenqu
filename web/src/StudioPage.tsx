@@ -6,6 +6,7 @@ import {
 } from './api'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
 import { SourcePanel } from './SourcePanel'
+import { BatchDeleteBar, useSelection } from './components/BatchDelete'
 
 /**
  * 产出页。
@@ -214,6 +215,8 @@ export function StudioPage() {
   const [liveNotice, setLiveNotice] = useState('')
   const [message, setMessage] = useState('')
   const [source, setSource] = useState<MessageSource | null>(null)
+  const [selecting, setSelecting] = useState(false)
+  const selection = useSelection()
   const abort = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
@@ -300,16 +303,43 @@ export function StudioPage() {
   return <div className={`studio-page${source ? ' with-source' : ''}`}>
     <aside className="studio-rail">
       <header><span className="eyebrow">STUDIO</span><h1>产出</h1>
-        <p>把资料整理成能追溯来源的指南或导图。</p></header>
+        <p>把资料整理成能追溯来源的指南或导图。</p>
+        {artifacts.length > 0 && !selecting && <button className="ghost" onClick={() => setSelecting(true)}>批量选择</button>}
+      </header>
       {artifacts.length === 0
         ? <p className="studio-empty">还没有产出。右侧填一个主题开始。</p>
-        : <div className="studio-list">{artifacts.map(item => <button key={item.id}
-            className={detail?.id === item.id ? 'active' : ''} onClick={() => void open(item.id)}>
-            <span className="studio-kind">{KINDS.find(entry => entry.id === item.kind)?.label ?? item.kind}</span>
-            <strong>{item.title}</strong>
-            <small><span className={`status-chip ${item.status}`}>{STATUS_LABEL[item.status]}</span>
-              {item.created_at.slice(0, 16).replace('T', ' ')}</small>
-          </button>)}</div>}
+        : <div className="studio-list">{artifacts.map(item => {
+            const row = <button className={detail?.id === item.id ? 'active' : ''}
+              onClick={() => selecting ? selection.toggle(item.id) : void open(item.id)}>
+              <span className="studio-kind">{KINDS.find(entry => entry.id === item.kind)?.label ?? item.kind}</span>
+              <strong>{item.title}</strong>
+              <small><span className={`status-chip ${item.status}`}>{STATUS_LABEL[item.status]}</span>
+                {item.created_at.slice(0, 16).replace('T', ' ')}</small>
+            </button>
+            return selecting
+              ? <div key={item.id} className={`studio-item${selection.isSelected(item.id) ? ' batch-selected' : ''}`}>
+                  <input type="checkbox" checked={selection.isSelected(item.id)} onChange={() => selection.toggle(item.id)} />
+                  {row}
+                </div>
+              : <div key={item.id} className="studio-item">{row}</div>
+          })}</div>}
+      {selecting && artifacts.length > 0 && <BatchDeleteBar
+        ids={[...selection.selected]}
+        allIds={artifacts.map(item => item.id)}
+        allSelected={selection.selected.size > 0 && selection.selected.size === artifacts.length}
+        onToggleAll={() => selection.selected.size === artifacts.length
+          ? selection.clear() : selection.setAll(artifacts.map(item => item.id))}
+        heading={`删除 ${selection.selected.size} 份产出？`}
+        lines={['随产出导出的图片也会一并删除。', '正在生成的产出会被跳过，不会被删除。']}
+        onCancel={() => { setSelecting(false); selection.clear() }}
+        onConfirm={async ids => {
+          const result = await api.deleteArtifacts(ids)
+          const removed = new Set(ids)
+          setDetail(current => current && removed.has(current.id) ? null : current)
+          await load()
+          return result
+        }}
+        onDone={() => { setSelecting(false); selection.clear() }} />}
     </aside>
 
     <main className="studio-main">

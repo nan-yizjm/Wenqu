@@ -78,6 +78,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   detail: vi.fn(),
   remove: vi.fn(),
+  removeBatch: vi.fn(),
   stop: vi.fn(),
   stream: vi.fn(),
   source: vi.fn(),
@@ -90,6 +91,7 @@ vi.mock('./api', () => ({
     artifacts: () => mocks.list(),
     artifact: (id: string) => mocks.detail(id),
     deleteArtifact: (id: string) => mocks.remove(id),
+    deleteArtifacts: (ids: string[]) => mocks.removeBatch(ids),
     stopArtifact: (id: string) => mocks.stop(id),
     streamArtifact: (topic: string, kind: string, onEvent: unknown, signal: unknown) =>
       mocks.stream(topic, kind, onEvent, signal),
@@ -112,6 +114,7 @@ beforeEach(() => {
     ...summary, id, content: '分页管理 KV Cache [S1]。', sources: [source], backlink: report(),
   } satisfies Artifact))
   mocks.remove.mockResolvedValue({ deleted: true })
+  mocks.removeBatch.mockResolvedValue({ deleted: 0, skipped: [] })
   mocks.stop.mockResolvedValue({ stopping: true })
   mocks.stream.mockResolvedValue(undefined)
   mocks.source.mockResolvedValue({ document_id: 'doc_a', version_id: 'ver_a', title: '推理.md',
@@ -408,5 +411,44 @@ describe('StudioPage infographic export', () => {
 
     expect(await screen.findByText('无法连接到工作台。')).toBeInTheDocument()
     expect(screen.getByTestId('infographic-export')).not.toBeDisabled()
+  })
+})
+
+describe('StudioPage 的批量删除', () => {
+  it('选择模式里勾选历史产出，确认文案说明「正在生成会跳过」', async () => {
+    mocks.removeBatch.mockResolvedValue({ deleted: 1, skipped: [], files_removed: 1 })
+    render(<StudioPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '批量选择' }))
+    fireEvent.click(await screen.findByRole('button', { name: /KV Cache/ }))
+    expect(await screen.findByText('已选 1 项')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('batch-confirm'))
+    expect(await screen.findByText('删除 1 份产出？')).toBeInTheDocument()
+    expect(screen.getByText('随产出导出的图片也会一并删除。')).toBeInTheDocument()
+    expect(screen.getByText('正在生成的产出会被跳过，不会被删除。')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('batch-confirm'))
+    await waitFor(() => expect(mocks.removeBatch).toHaveBeenCalledWith(['art_1']))
+    expect(await screen.findByText(/已删除 1 项/)).toBeInTheDocument()
+    expect(screen.getByText(/一并清理导出文件 1 个/)).toBeInTheDocument()
+  })
+
+  it('结果条里的 skipped 项带标题与原因', async () => {
+    mocks.removeBatch.mockResolvedValue({ deleted: 0, skipped: [
+      { id: 'art_1', label: 'KV Cache', code: 'busy', reason: '这份产出还在生成，请先停止再删除。' },
+    ] })
+    render(<StudioPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '批量选择' }))
+    fireEvent.click(await screen.findByRole('button', { name: /KV Cache/ }))
+    await screen.findByText('已选 1 项')
+    fireEvent.click(screen.getByTestId('batch-confirm'))
+    fireEvent.click(await screen.findByTestId('batch-confirm'))
+
+    expect(await screen.findByText('已删除 0 项')).toBeInTheDocument()
+    expect(screen.getByText(/KV Cache：这份产出还在生成/)).toBeInTheDocument()
+    // 产出没有被删，列表还在
+    expect(screen.getByRole('button', { name: /KV Cache/ })).toBeInTheDocument()
   })
 })

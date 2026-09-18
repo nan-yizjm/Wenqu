@@ -5,6 +5,7 @@ import { SourcePanel } from './SourcePanel'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
 import { HitMeta, Preview, RelevanceBar } from './components/HitMeta'
 import { FolderPicker } from './components/FolderPicker'
+import { BatchDeleteBar, useSelection } from './components/BatchDelete'
 
 export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> }) {
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -19,6 +20,8 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const [selected, setSelected] = useState<SearchHit | null>(null)
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [selecting, setSelecting] = useState(false)
+  const selection = useSelection()
   const uploadInput = useRef<HTMLInputElement>(null)
   const load = async () => {
     const [libraryData, documentData, jobData, resourceData] = await Promise.all(
@@ -64,6 +67,22 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
     if (!window.confirm(`从工作台移除“${document.display_name}”？原文件不会被删除。`)) return
     await api.removeDocument(document.id); await load(); setHits(hits.filter(hit => hit.document_id !== document.id))
   }
+  /** 批量移除。请求成功后返回结果给确认条展示；列表刷新放在这里一次做完。 */
+  const removeBatch = async (ids: string[]) => {
+    const result = await api.removeDocuments(ids)
+    const removed = new Set(ids)
+    setHits(hits.filter(hit => !removed.has(hit.document_id)))
+    await load()
+    return result
+  }
+  const exitSelecting = () => { setSelecting(false); selection.clear() }
+  // 文件夹来源的资料"移除"是暂时的：文件还在磁盘上，刷新就会重新导入。
+  // 这句话必须出现在确认框里，行为与文案不一致比不说更糟。
+  const folderSelectedCount = documents.filter(document => selection.isSelected(document.id)
+    && libraries.find(library => library.id === document.library_id)?.kind === 'folder').length
+  const batchLines = ['原文件不会被删除，检索结果将不再包含这些资料。']
+  if (folderSelectedCount > 0) batchLines.push(
+    `其中 ${folderSelectedCount} 篇来自已连接的文件夹，只是暂时移除——刷新那个文件夹时它们会被重新导入。`)
   const retry = async (document: DocumentItem) => {
     try { await api.retryDocument(document.id); setMessage(`正在重试 ${document.display_name}…`); await load() }
     catch (e) { setMessage(e instanceof Error ? e.message : '重试失败') }
@@ -94,7 +113,8 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
           <p><Preview text={hit.preview} tokens={hit.matched_tokens} /></p>
           <div className="result-meta"><RelevanceBar score={hit.score} scores={hits.map(item => item.score)} />
             <HitMeta hit={hit} rank={index} /></div></button>)}</section>}
-      <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span></div>
+      <section className="documents"><div className="section-title"><h2>已接入资料</h2><span>{documents.length} 个文件 · {libraries.length} 个来源</span>
+        {documents.length > 0 && !selecting && <button className="ghost" onClick={() => setSelecting(true)}>批量选择</button>}</div>
         {!loaded ? <div className="documents-skeleton"><SkeletonLines count={3} /></div>
           : documents.length === 0 ? <EmptyState glyph="▤" title="还没有接入资料">
             <p>添加第一份资料后，可以在这里查看处理状态和原文版本。</p>
@@ -104,10 +124,30 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
                 className="secondary" onClick={() => void importExample(item.name)}>导入随包示例「{item.name}」</button>)}</div>
             </>}
           </EmptyState> :
-          <div className="document-list">{documents.map(document => <div className="document-row" key={document.id}><span className="file-icon">{mediaLabel(document.media_type)}</span>
-            <div><strong>{document.display_name}</strong><small>{document.library_name} / {document.relative_path}</small>{document.error && <em>{document.error}</em>}</div>
-            <span className={`status-chip ${document.status}`}>{document.status === 'ready' ? '可搜索' : document.status === 'failed' ? '失败' : document.status === 'processing' ? '处理中' : document.status}</span>
-            <span className="row-actions">{document.status === 'failed' && <button className="row-action" onClick={() => void retry(document)}>重试</button>}<button className="row-action" onClick={() => void remove(document)}>移除</button></span></div>)}</div>}
+          <div className={`document-list${selecting ? ' selecting' : ''}`}>
+            {documents.map(document => {
+              const checked = selection.isSelected(document.id)
+              return <div key={document.id}
+                className={`document-row${selecting && checked ? ' batch-selected' : ''}`}
+                onClick={selecting ? () => selection.toggle(document.id) : undefined}>
+                {selecting && <input type="checkbox" className="batch-check" checked={checked}
+                  onChange={() => selection.toggle(document.id)} onClick={event => event.stopPropagation()} />}
+                <span className="file-icon">{mediaLabel(document.media_type)}</span>
+                <div><strong>{document.display_name}</strong><small>{document.library_name} / {document.relative_path}</small>{document.error && <em>{document.error}</em>}</div>
+                <span className={`status-chip ${document.status}`}>{document.status === 'ready' ? '可搜索' : document.status === 'failed' ? '失败' : document.status === 'processing' ? '处理中' : document.status}</span>
+                <span className="row-actions">{document.status === 'failed' && <button className="row-action" onClick={event => { event.stopPropagation(); void retry(document) }}>重试</button>}<button className="row-action" onClick={event => { event.stopPropagation(); void remove(document) }}>移除</button></span></div>
+            })}</div>}
+        {selecting && documents.length > 0 && <BatchDeleteBar
+          ids={[...selection.selected]}
+          allIds={documents.map(document => document.id)}
+          allSelected={selection.selected.size > 0 && selection.selected.size === documents.length}
+          onToggleAll={() => selection.selected.size === documents.length
+            ? selection.clear() : selection.setAll(documents.map(document => document.id))}
+          heading={`移除 ${selection.selected.size} 篇资料？`}
+          lines={batchLines}
+          onCancel={exitSelecting}
+          onConfirm={removeBatch}
+          onDone={exitSelecting} />}
       </section>
     </div>
     {selected && <SourcePanel hit={selected} close={() => setSelected(null)} />}
