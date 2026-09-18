@@ -98,10 +98,10 @@ class MemorySeamTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_schema_is_version_eight(self):
+    def test_schema_is_version_nine(self):
         self.build()
 
-        self.assertEqual(self.app.state.database.schema_version(), 8)
+        self.assertEqual(self.app.state.database.schema_version(), 9)
 
     def test_the_note_layer_is_marked_in_payload_and_in_the_database(self):
         self.build()

@@ -217,6 +217,46 @@ MIGRATIONS = {
         ALTER TABLE message_sources ADD COLUMN origin TEXT NOT NULL DEFAULT 'note';
         ALTER TABLE favorite_sources ADD COLUMN origin TEXT NOT NULL DEFAULT 'note';
     """,
+    # 产出物（Studio）。`artifact_sources` 刻意与 `message_sources` 同形：产出物里的
+    # 引用要和回答里的引用用同一套东西渲染与打开，来源表形状一致才能复用
+    # `chat.source_record()`、前端的 `MessageSource` 与引用改写，否则就要为产出物
+    # 再写第三套判断（记忆、网络已经是同一张表的两种 origin）。
+    #
+    # `index_version` 记的是生成时用的索引版本：产出物是某一时刻语料的快照式结论，
+    # 语料变了它不会自动更新，记下来才能在界面上说清"这份产出是什么时候的语料"。
+    9: """
+        CREATE TABLE artifacts (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK(kind IN ('guide', 'mindmap')),
+            title TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            status TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            index_version TEXT,
+            error_code TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        CREATE TABLE artifact_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            label TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            chunk_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            version_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            heading_path TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            preview TEXT NOT NULL,
+            score_json TEXT,
+            origin TEXT NOT NULL DEFAULT 'note',
+            UNIQUE(artifact_id, label)
+        );
+        CREATE INDEX idx_artifact_sources_artifact ON artifact_sources(artifact_id, position);
+        CREATE INDEX idx_artifacts_created ON artifacts(created_at);
+    """,
 }
 
 

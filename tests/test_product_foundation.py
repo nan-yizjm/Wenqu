@@ -30,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 8)
+        self.assertEqual(health.json()["database_schema"], 9)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -86,12 +86,12 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version = 2")
             connection.commit()
         database = Database(paths)
-        self.assertEqual(database.schema_version(), 8)
+        self.assertEqual(database.schema_version(), 9)
         self.assertTrue(database.fetchone(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
         # 备份名用的是**最后一个待执行版本**（database.py 的 pending[-1]），
         # 不是用户升级前的版本号。加新迁移时这行要跟着改。
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v8-*.sqlite3"))), 1)
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v9-*.sqlite3"))), 1)
 
     def test_upgrading_a_v7_database_backfills_the_note_layer(self):
         """v7 → v8 是用户升级时真正会走的那条路，存量行必须被补成 'note'。
@@ -130,30 +130,30 @@ class ProductFoundationTests(unittest.TestCase):
 
         database = Database(paths)
         self.assertIsNone(database.migration_error)
-        self.assertEqual(database.schema_version(), 8)
+        self.assertEqual(database.schema_version(), 9)
         self.assertEqual(database.fetchone(
             "SELECT origin FROM message_sources WHERE label='S1'")["origin"], "note")
         self.assertEqual(database.fetchone(
             "SELECT origin FROM favorite_sources WHERE label='S1'")["origin"], "note")
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v8-*.sqlite3"))), 1)
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v9-*.sqlite3"))), 1)
 
     def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         paths = ProductPaths(Path(temporary.name) / "恢复数据").ensure()
-        # 手工停在 v4，这样 pending 会是 [5, 6, 7, 8]：v5 的表重建真的跑起来，
-        # 再让 v8 失败，才能验到重建被回滚。
+        # 手工停在 v4，这样 pending 会是 [5, 6, 7, 8, 9]：v5 的表重建真的跑起来，
+        # 再让 v9 失败，才能验到重建与建表都被回滚。
         with closing(sqlite3.connect(paths.database)) as connection:
             for version in (1, 2, 3, 4):
                 connection.executescript(MIGRATIONS[version])
             connection.execute("PRAGMA user_version = 4")
             connection.commit()
-        # 造假迁移之前先把真的存下来。**不能改成 `MIGRATIONS.pop(8, None)`**：
+        # 造假迁移之前先把真的存下来。**不能改成 `MIGRATIONS.pop(9, None)`**：
         # MIGRATIONS 是模块级字典，pop 掉之后这个进程里所有后续测试建出来的库
-        # 都停在 v7，而产品代码已按 v8 写 `origin` 列——表现为一批八竿子打不着
-        # 的模块报 "table message_sources has no column named origin"。
-        # （2026-09-18 实测：219 项里 18 项因此变红。）
-        real_eight = MIGRATIONS[8]
-        MIGRATIONS[8] = "THIS IS NOT VALID SQL;"
+        # 都停在 v8，而产品代码已按 v9 建产出物表——表现为一批八竿子打不着
+        # 的模块报 "no such table: artifacts"。
+        # （2026-09-18 实测：v8 那次同样的写法让 219 项里 18 项变红。）
+        real_nine = MIGRATIONS[9]
+        MIGRATIONS[9] = "THIS IS NOT VALID SQL;"
         try:
             app = create_product_app(
                 paths, MemoryCredentialStore(),
@@ -179,13 +179,18 @@ class ProductFoundationTests(unittest.TestCase):
                     self.assertIsNone(probe.execute(
                         "SELECT name FROM pragma_table_info('favorites')"
                         " WHERE name='tags_json'").fetchone())
-                    # v8 的两条 ADD COLUMN 是最后一批待执行版本，同样必须被回滚。
+                    # v8 的两条 ADD COLUMN 落在最后一批待执行版本里，同样必须被回滚。
                     self.assertIsNone(probe.execute(
                         "SELECT name FROM pragma_table_info('message_sources')"
                         " WHERE name='origin'").fetchone())
                     self.assertIsNone(probe.execute(
                         "SELECT name FROM pragma_table_info('favorite_sources')"
                         " WHERE name='origin'").fetchone())
+                    # v9 是建表（不是加列），回滚后连表都不该存在。
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM sqlite_master WHERE name='artifacts'").fetchone())
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM sqlite_master WHERE name='artifact_sources'").fetchone())
                 self.assertEqual(client.get("/api/v1/search", params={"q": "RAG"}).status_code,
                                  503)
                 restored = client.post("/api/v1/system/recovery/restore", json={
@@ -193,11 +198,11 @@ class ProductFoundationTests(unittest.TestCase):
                 self.assertEqual(restored.status_code, 200)
                 self.assertTrue(restored.json()["restart_required"])
         finally:
-            MIGRATIONS[8] = real_eight
+            MIGRATIONS[9] = real_nine
         reopened = Database(paths)
         self.assertIsNone(reopened.migration_error)
-        # 失败的那次已被回滚，重开时会拿**真的** v8 再跑一遍，所以这里到 8。
-        self.assertEqual(reopened.schema_version(), 8)
+        # 失败的那次已被回滚，重开时会拿**真的** v9 再跑一遍，所以这里到 9。
+        self.assertEqual(reopened.schema_version(), 9)
 
     def test_documents_table_rebuild_keeps_rows_and_widens_media_type(self):
         """v5 重建 documents，搬数据必须一字不差。
@@ -232,7 +237,7 @@ class ProductFoundationTests(unittest.TestCase):
 
         database = Database(paths)
         self.assertIsNone(database.migration_error)
-        self.assertEqual(database.schema_version(), 8)
+        self.assertEqual(database.schema_version(), 9)
 
         row = database.fetchone("SELECT * FROM documents WHERE id = 'doc_a'")
         self.assertEqual(row["relative_path"], "a.md")
