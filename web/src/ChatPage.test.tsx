@@ -138,7 +138,7 @@ function conversationWith(sources: Omit<MessageSource, 'label'>[]): Conversation
     messages: [{
       id: 'a1', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
       status: 'complete', provider: null, model: null, index_version: null,
-      error_code: null, reply_to_message_id: null,
+      error_code: null, reply_to_message_id: null, web_state: null,
       sources: sources.map((source, index) => ({ ...source, label: `S${index + 1}` })),
     }],
   }
@@ -215,8 +215,9 @@ describe('ChatPage web notice', () => {
   /**
    * 问一轮，让后端按给定的联网状态回一次流。
    *
-   * 重取会话的桩也要返回同一条消息：答完之后组件会在 350ms 后重新拉一次会话，
-   * 若那时返回空消息列表，断言就会与这次重取赛跑（先通过后消失）。
+   * 重取会话的桩也要返回同一条消息**连同同一个 `web_state`**：答完之后组件会在
+   * 350ms 后重新拉一次会话，服务端持久化过的东西就该原样回来。桩里漏掉它，测的
+   * 就是"组件记住了"而不是"库里记住了"——那正是这次要修的东西。
    */
   async function ask(web: WebState, sources: Omit<MessageSource, 'label'>[] = [WEB_SOURCE]) {
     const labelled = sources.map((source, index) => ({ ...source, label: `S${index + 1}` }))
@@ -225,7 +226,7 @@ describe('ChatPage web notice', () => {
       messages: [{
         id: 'a-new', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
         status: 'complete', provider: null, model: null, index_version: null,
-        error_code: null, reply_to_message_id: null, sources: labelled,
+        error_code: null, reply_to_message_id: null, sources: labelled, web_state: web,
       }],
     }
     mocks.detail.mockImplementation(async () => answer)
@@ -271,5 +272,69 @@ describe('ChatPage web notice', () => {
     expect(await screen.findByText('网络')).toBeInTheDocument()
     expect(screen.getByText('笔记')).toBeInTheDocument()
     expect(screen.getByText('PagedAttention 原论文')).toBeInTheDocument()
+  })
+
+  it('still says the answer was offline when the conversation is reopened', async () => {
+    // 这条不经过任何流式事件：只把服务端返回的一条历史回答渲染出来。联网状态
+    // 过去只活在事件里，重开一次会话提示就没了——`failed` 于是变成"看起来今天
+    // 没什么可网的"。现在它随消息从库里读回，翻旧的也该看得见。
+    mocks.detail.mockImplementation(async () => ({
+      id: 'c1', title: '一个会话', created_at: '2026-01-01', updated_at: '2026-01-01',
+      messages: [{
+        id: 'a-old', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
+        status: 'complete', provider: null, model: null, index_version: null,
+        error_code: null, reply_to_message_id: null,
+        sources: [{ ...WEB_SOURCE, label: 'S1' }],
+        web_state: { status: 'failed', provider: 'recording', detail: 'TimeoutError' },
+      }],
+    }))
+
+    render(<ChatPage />)
+
+    expect(await screen.findByText(/本次未能联网（TimeoutError）/)).toBeInTheDocument()
+    // 不能拿流式事件凑——这条回答根本没有流。
+    expect(mocks.stream).not.toHaveBeenCalled()
+  })
+
+  it('warns as soon as the answer lands, without waiting for the refetch', async () => {
+    // 答完之后组件还要在 350ms 处重取一次会话。提示不能依赖那一次：重取慢、重取
+    // 失败、用户抢在那之前就滑到这条回答——"本次未能联网"都该已经在屏幕上。
+    // 这里让重取永远不返回，把时序钉死。
+    const web = { status: 'failed', provider: 'recording', detail: 'RuntimeError' }
+    mocks.stream.mockImplementation(
+      async (_id: string, _body: unknown, onEvent: (event: unknown) => void) => {
+        onEvent({ type: 'retrieval', message_id: 'a-new', sources: [], web })
+        onEvent({ type: 'final', message_id: 'a-new', content: '答案。', status: 'complete', sources: [] })
+      })
+    mocks.detail.mockImplementationOnce(async (id: string) => ({
+      id, title: '新会话', created_at: '', updated_at: '', messages: [] }))
+    mocks.detail.mockImplementation(() => new Promise(() => {}))
+
+    render(<ChatPage />)
+    const box = await screen.findByPlaceholderText('询问你的资料；Shift + Enter 换行')
+    fireEvent.change(box, { target: { value: 'PagedAttention 是什么？' } })
+    fireEvent.click(screen.getByText('发送'))
+
+    expect(await screen.findByText(/本次未能联网（RuntimeError）/)).toBeInTheDocument()
+  })
+
+  it('does not invent a web verdict for answers that have no record', async () => {
+    // `web_state: null` 是"没有记录"（v10 之前的回答，或被守卫拦下的回答），
+    // 不是"当时没联网"。界面一句话都不该说：说出来就是替历史编结论。
+    mocks.detail.mockImplementation(async () => ({
+      id: 'c1', title: '一个会话', created_at: '2026-01-01', updated_at: '2026-01-01',
+      messages: [{
+        id: 'a-old', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
+        status: 'complete', provider: null, model: null, index_version: null,
+        error_code: null, reply_to_message_id: null,
+        sources: [{ ...NOTE_SOURCE, label: 'S1' }], web_state: null,
+      }],
+    }))
+
+    render(<ChatPage />)
+    await screen.findByText('推理.md')
+
+    expect(screen.queryByText(/本次未能联网/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/还没有配置搜索后端/)).not.toBeInTheDocument()
   })
 })

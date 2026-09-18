@@ -6,7 +6,9 @@
 1. 开关关着时**一个字节都不出去**（堵在 socket 层证明，不只是断言"提供者没被调用"）；
 2. 只发查询词，**绝不发笔记正文**；
 3. 没有后端时，即使开关打开也不会有请求——并如实上报"没有后端"，不假装搜过；
-4. 提供者坏了不许拒绝服务，但**必须显式标注"本次未能联网"**，不能静默降级。
+4. 提供者坏了不许拒绝服务，但**必须显式标注"本次未能联网"**，不能静默降级；
+5. 每轮的结果状态随回答一起入库：重开会话之后，"这轮到底联没联上"仍然查得到。
+   只活在流式事件里的状态不是记录，是一次转瞬即逝的提示。
 """
 
 import contextlib
@@ -295,6 +297,86 @@ class WebSeamTests(unittest.TestCase):
 
         self.assertEqual(web["provider"], "none")
         self.assertFalse(web["configured"])
+
+    def test_the_web_state_is_stored_with_the_answer_not_just_streamed(self):
+        """联网状态要跟来源一样落进库里。
+
+        它原本只在一帧流式事件里出现过，界面答完重取一次会话就再也说不出
+        "这轮到底联没联上"——一次可核查的事实变成了一次转瞬即逝的提示。
+        """
+        self.build(RecordingSearchProvider([WEB_RESULT]))
+        self.enable()
+
+        final = self.ask()[-1]
+        loaded = self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").json()
+        answer = next(item for item in loaded["messages"] if item["id"] == final["message_id"])
+        question = next(item for item in loaded["messages"] if item["role"] == "user")
+
+        self.assertEqual(answer["web_state"], {"status": "ok", "provider": "recording"})
+        # 用户那条消息没有联网状态可言。补一个 `off` 就是替它编了一句"当时没联网"。
+        self.assertIsNone(question["web_state"])
+        # 数据库里也是同一份，不是接口现编的。
+        self.assertEqual(self.stored_web_state(final["message_id"]),
+                         {"status": "ok", "provider": "recording"})
+
+    def test_a_failed_search_is_still_on_the_record_after_reopening(self):
+        """失败尤其要留得住：它是**唯一**会让用户以为"今天没什么可网的"的状态。"""
+        self.build(RecordingSearchProvider(fail=True))
+        self.enable()
+        final = self.ask()[-1]
+
+        loaded = self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").json()
+        answer = next(item for item in loaded["messages"] if item["id"] == final["message_id"])
+
+        self.assertEqual(answer["web_state"],
+                         {"status": "failed", "provider": "recording", "detail": "RuntimeError"})
+
+    def test_what_is_stored_about_a_search_is_only_the_verdict(self):
+        """落库的只有结论，没有查询词，更没有搜回来的正文。
+
+        存快照会让"数据不出机器"这条承诺在**磁盘上**失效：一份联网结果躺在库里，
+        就再也没人记得它来自外部了。要复读当初搜到了什么，去来源表看。
+        """
+        self.build(RecordingSearchProvider([WEB_RESULT]))
+        self.enable()
+        final = self.ask()[-1]
+
+        stored = json.dumps(self.stored_web_state(final["message_id"]), ensure_ascii=False)
+
+        self.assertNotIn(QUESTION, stored)
+        self.assertNotIn("分页", stored)
+        self.assertNotIn("arxiv", stored)
+
+    def test_an_answer_that_never_reached_the_web_layer_keeps_no_record(self):
+        """被能力守卫拦下的回答没有联网状态——不是 `off`，是**没有记录**。
+
+        两者在界面上都是"不说话"，但库里必须分得开：`off` 是一句关于当时情况的
+        断言，而这条回答根本没有走到联网那一层，断言不了。
+        """
+        self.build(RecordingSearchProvider([WEB_RESULT]))
+        self.enable()
+
+        events = self.ask("北京明天天气怎么样？")
+        self.assertTrue(events[-1]["rejected"])
+
+        loaded = self.client.get(
+            f"/api/v1/conversations/{self.conversation['id']}").json()
+        answer = next(item for item in loaded["messages"]
+                      if item["id"] == events[-1]["message_id"])
+
+        self.assertIsNone(answer["web_state"])
+        self.assertIsNone(self.stored_web_state(events[-1]["message_id"]))
+
+    def stored_web_state(self, message_id):
+        connection = sqlite3.connect(f"file:{self.paths.database}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT web_state_json FROM messages WHERE id=?", (message_id,)).fetchone()
+        finally:
+            connection.close()
+        return json.loads(row[0]) if row and row[0] else None
 
 
 class NullSearchProviderTests(unittest.TestCase):

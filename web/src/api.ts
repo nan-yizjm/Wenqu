@@ -80,7 +80,12 @@ export type SourceContent = { document_id: string; version_id: string; title: st
  */
 export type SourceRef = Omit<SearchHit, 'score' | 'matched_tokens'> & { score?: number | null; matched_tokens?: string[] }
 export type MessageSource = SourceRef & { label: string }
-export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[] }
+/**
+ * `web_state` 是这一轮联网的**持久记录**，`null` 表示没有记录（旧版本写的回答，
+ * 或这条回答没过联网这一层，例如被守卫拦下）。它不从事件里推，也不在界面重新
+ * 计算——服务端当时怎么记的，翻出来就是什么。
+ */
+export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[]; web_state: WebState | null }
 export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }
 export type FavoriteSummary = { id: string; message_id: string; title: string; note: string; question: string; answer: string; provider: string | null; model: string | null; index_version: string | null; generated_at: string | null; updated_at: string; source_count: number; tags: string[]; libraries: { id: string; name: string }[]; feedback_kind: FeedbackKind | null }
 export type Favorite = FavoriteSummary & { sources: MessageSource[] }

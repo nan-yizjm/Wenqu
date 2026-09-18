@@ -90,9 +90,6 @@ export function ChatPage() {
   const [message, setMessage] = useState('')
   const [selected, setSelected] = useState<MessageSource | null>(null)
   const [savedFeedback, setSavedFeedback] = useState<Record<string, { kind: FeedbackKind; note: string }>>({})
-  // 每轮问答的联网状态。存在组件里而不是消息里：消息答完会从服务端重取一遍，
-  // 而联网状态没有入库（见学习记录 35 的"还没解决什么"），放消息上会在重取后消失。
-  const [webStates, setWebStates] = useState<Record<string, WebState>>({})
   const [loaded, setLoaded] = useState(false)
   const controller = useRef<AbortController | null>(null)
   const streamingMessage = useRef<string | null>(null)
@@ -119,17 +116,12 @@ export function ChatPage() {
     const tempId = `temp-${Date.now()}`
     const optimistic = [...(active.messages || [])]
     if (prompt) optimistic.push({ id: `user-${Date.now()}`, conversation_id: active.id, role: 'user', content: prompt,
-      status: 'complete', provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [] })
+      status: 'complete', provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [], web_state: null })
     optimistic.push({ id: tempId, conversation_id: active.id, role: 'assistant', content: '', status: 'streaming',
-      provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [] })
+      provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [], web_state: null })
     setActive({ ...active, messages: optimistic }); setQuestion(''); setBusy(true); setMessage('')
     const abort = new AbortController(); controller.current = abort
     const applyEvent = (event: StreamEvent) => {
-      // 放在 setActive 外面：在更新函数里调另一个 setState 会变成渲染期的副作用。
-      if (event.type === 'retrieval' && event.web) {
-        const state = event.web
-        setWebStates(current => ({ ...current, [event.message_id]: state }))
-      }
       setActive(current => {
         streamingMessage.current = event.message_id
         if (!current) return current
@@ -138,7 +130,10 @@ export function ChatPage() {
         if (index < 0) return current
         const existing = messages[index]
         const next = { ...existing, id: event.message_id }
-        if (event.type === 'retrieval') next.sources = event.sources || []
+        if (event.type === 'retrieval') {
+          next.sources = event.sources || []
+          if (event.web) next.web_state = event.web
+        }
         if (event.type === 'generation') { next.provider = event.provider || null; next.model = event.model || null }
         if (event.type === 'token') next.content += event.text || ''
         if (event.type === 'final' || event.type === 'stopped' || event.type === 'error') {
@@ -231,7 +226,7 @@ export function ChatPage() {
             : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}
           {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">
             {sourceChips(item.sources, selected, setSelected)}</div>}
-          {item.role === 'assistant' && webStates[item.id] && <WebNotice state={webStates[item.id]} />}
+          {item.role === 'assistant' && item.web_state && <WebNotice state={item.web_state} />}
           {item.role === 'assistant' && item.status === 'complete' && item.error_code !== 'guard_rejected' && <div className="answer-actions">
             {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}
             <FeedbackPanel saved={savedFeedback[item.id]} onSave={(kind, note) => feedback(item, kind, note)} />
