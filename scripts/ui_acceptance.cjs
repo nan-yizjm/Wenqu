@@ -42,6 +42,19 @@ function check(name, passed, detail) {
   console.log(`${passed ? 'PASS' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
 }
 
+// Chrome 的 user-data-dir 是脚本自己建的临时目录，必须自己收掉。只 kill 不删会
+// 在 TEMP 里每次留一个 50 MB 上下的 profile（实测 4 次运行留下 176 MB）。
+// 删之前要等进程真的退出：Chrome 还占着的时候删，只会留下删不掉的半个目录。
+let spawnedChrome = null;
+let spawnedProfile = null;
+async function cleanup() {
+  if (!spawnedChrome) return;
+  spawnedChrome.kill();
+  await Promise.race([new Promise(r => spawnedChrome.once('exit', r)), sleep(3000)]);
+  try { fs.rmSync(spawnedProfile, { recursive: true, force: true }); } catch { /* 留给系统清 */ }
+  spawnedChrome = null;
+}
+
 class Session {
   constructor(ws) { this.ws = ws; this.id = 0; this.pending = new Map(); this.consoleErrors = []; }
   static async open(url) {
@@ -97,6 +110,7 @@ const clickByText = (text, scope) => `(() => {
     `--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profile}`,
     '--window-size=1440,900', 'about:blank',
   ], { stdio: 'ignore' });
+  spawnedChrome = chrome; spawnedProfile = profile;
 
   let targets = null;
   for (let i = 0; i < 50; i++) {
@@ -211,11 +225,31 @@ const clickByText = (text, scope) => `(() => {
   check('760px 下没有横向溢出', overflow.文档宽度 <= overflow.视口宽度 + 1, JSON.stringify(overflow));
   check('760px 下侧栏折成图标条（文字隐藏）', overflow.侧栏文字可见 === false, '');
 
+  // ---- 8. 设置页的记忆开关（只切换开关，不点「保存设置」，不改任何数据） ----
+  await s.eval(`(() => { const b=[...document.querySelectorAll('nav button')].find(x=>x.textContent.includes('设置')); if(b) b.click(); })()`);
+  await sleep(2000);
+  const memoryCard = await s.eval(`(() => {
+    const card = [...document.querySelectorAll('.card')].find(c => (c.querySelector('h3')||{}).textContent === '记忆');
+    if (!card) return { 卡片: false };
+    const buttons = [...card.querySelectorAll('.segmented button')];
+    return { 卡片: true,
+      选项: buttons.map(b => b.textContent.trim()),
+      选中: buttons.filter(b => b.className.includes('active')).map(b => b.textContent.trim()),
+      状态行: (card.querySelector('.status-line') || {}).textContent };
+  })()`);
+  check('设置页有记忆卡片且选项为开启/关闭', memoryCard.卡片 === true
+        && JSON.stringify(memoryCard.选项) === JSON.stringify(['开启', '关闭']), JSON.stringify(memoryCard));
+  // 出厂默认必须是关，而且界面要把"关"说清楚——这是这个接缝唯一的对外承诺。
+  check('记忆默认关闭且状态行如实说明',
+        JSON.stringify(memoryCard.选中) === JSON.stringify(['关闭'])
+        && /记忆已关闭/.test(memoryCard.状态行 || ''), JSON.stringify(memoryCard));
+  await s.shot('accept-settings.png', 1440, 900);
+
   const errors = s.consoleErrors;
   check('页面无未捕获异常', errors.length === 0, errors.slice(0, 3).join(' | '));
 
-  chrome.kill();
+  await cleanup();
   const failed = results.filter(r => !r.passed);
   console.log(`\n合计 ${results.length} 项，通过 ${results.length - failed.length}，失败 ${failed.length}`);
   if (failed.length) { console.log('失败项：'); failed.forEach(f => console.log('  - ' + f.name)); process.exit(1); }
-})().catch(e => { console.error('脚本失败:', e.message); process.exit(2); });
+})().catch(async e => { console.error('脚本失败:', e.message); await cleanup(); process.exit(2); });
