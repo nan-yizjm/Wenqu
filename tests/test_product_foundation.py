@@ -30,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 7)
+        self.assertEqual(health.json()["database_schema"], 8)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -86,10 +86,56 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version = 2")
             connection.commit()
         database = Database(paths)
-        self.assertEqual(database.schema_version(), 7)
+        self.assertEqual(database.schema_version(), 8)
         self.assertTrue(database.fetchone(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v7-*.sqlite3"))), 1)
+        # 备份名用的是**最后一个待执行版本**（database.py 的 pending[-1]），
+        # 不是用户升级前的版本号。加新迁移时这行要跟着改。
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v8-*.sqlite3"))), 1)
+
+    def test_upgrading_a_v7_database_backfills_the_note_layer(self):
+        """v7 → v8 是用户升级时真正会走的那条路，存量行必须被补成 'note'。
+
+        这是**唯一**会碰到真实数据的迁移场景：v8 之前装过的人，升级后打开旧
+        会话与旧收藏。补不成的话，旧来源缺"这条依据来自哪一层"的唯一线索，
+        而新写入的来源都带着 origin——新旧混在一起比全都缺更难解释。
+
+        已有测试只覆盖"全新库建到 v8"和"从 v2/v4 升级"，都碰不到存量来源行。
+        """
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "升级数据").ensure()
+        with closing(sqlite3.connect(paths.database)) as connection:
+            for version in range(1, 8):
+                connection.executescript(MIGRATIONS[version])
+            connection.execute("PRAGMA user_version = 7")
+            connection.execute("""INSERT INTO conversations(id, title, created_at, updated_at)
+                VALUES ('conv_a', '旧会话', 'c', 'u')""")
+            connection.execute("""INSERT INTO messages(id, conversation_id, role, content,
+                    status, created_at)
+                VALUES ('msg_a', 'conv_a', 'assistant', '旧回答', 'complete', 'c')""")
+            connection.execute("""INSERT INTO message_sources(message_id, label, position,
+                    chunk_id, document_id, version_id, title, media_type, heading_path,
+                    locator_json, preview, score_json)
+                VALUES ('msg_a', 'S1', 1, 'chk_a', 'doc_a', 'ver_a', '旧笔记', 'markdown',
+                        '标题', '{"kind":"markdown","start_line":1,"end_line":2}', '旧片段', NULL)""")
+            connection.execute("""INSERT INTO favorites(id, message_id, title, question, answer,
+                    created_at, updated_at)
+                VALUES ('fav_a', 'msg_a', '旧收藏', '旧问题', '旧回答', 'c', 'u')""")
+            connection.execute("""INSERT INTO favorite_sources(favorite_id, label, position,
+                    chunk_id, document_id, version_id, title, media_type, heading_path,
+                    locator_json, preview, score_json)
+                VALUES ('fav_a', 'S1', 1, 'chk_a', 'doc_a', 'ver_a', '旧笔记', 'markdown',
+                        '标题', '{"kind":"markdown","start_line":1,"end_line":2}', '旧片段', NULL)""")
+            connection.commit()
+
+        database = Database(paths)
+        self.assertIsNone(database.migration_error)
+        self.assertEqual(database.schema_version(), 8)
+        self.assertEqual(database.fetchone(
+            "SELECT origin FROM message_sources WHERE label='S1'")["origin"], "note")
+        self.assertEqual(database.fetchone(
+            "SELECT origin FROM favorite_sources WHERE label='S1'")["origin"], "note")
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v8-*.sqlite3"))), 1)
 
     def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
@@ -101,6 +147,12 @@ class ProductFoundationTests(unittest.TestCase):
                 connection.executescript(MIGRATIONS[version])
             connection.execute("PRAGMA user_version = 4")
             connection.commit()
+        # 造假迁移之前先把真的存下来。**不能改成 `MIGRATIONS.pop(8, None)`**：
+        # MIGRATIONS 是模块级字典，pop 掉之后这个进程里所有后续测试建出来的库
+        # 都停在 v7，而产品代码已按 v8 写 `origin` 列——表现为一批八竿子打不着
+        # 的模块报 "table message_sources has no column named origin"。
+        # （2026-09-18 实测：219 项里 18 项因此变红。）
+        real_eight = MIGRATIONS[8]
         MIGRATIONS[8] = "THIS IS NOT VALID SQL;"
         try:
             app = create_product_app(
@@ -127,6 +179,13 @@ class ProductFoundationTests(unittest.TestCase):
                     self.assertIsNone(probe.execute(
                         "SELECT name FROM pragma_table_info('favorites')"
                         " WHERE name='tags_json'").fetchone())
+                    # v8 的两条 ADD COLUMN 是最后一批待执行版本，同样必须被回滚。
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM pragma_table_info('message_sources')"
+                        " WHERE name='origin'").fetchone())
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM pragma_table_info('favorite_sources')"
+                        " WHERE name='origin'").fetchone())
                 self.assertEqual(client.get("/api/v1/search", params={"q": "RAG"}).status_code,
                                  503)
                 restored = client.post("/api/v1/system/recovery/restore", json={
@@ -134,10 +193,11 @@ class ProductFoundationTests(unittest.TestCase):
                 self.assertEqual(restored.status_code, 200)
                 self.assertTrue(restored.json()["restart_required"])
         finally:
-            MIGRATIONS.pop(8, None)
+            MIGRATIONS[8] = real_eight
         reopened = Database(paths)
         self.assertIsNone(reopened.migration_error)
-        self.assertEqual(reopened.schema_version(), 7)
+        # 失败的那次已被回滚，重开时会拿**真的** v8 再跑一遍，所以这里到 8。
+        self.assertEqual(reopened.schema_version(), 8)
 
     def test_documents_table_rebuild_keeps_rows_and_widens_media_type(self):
         """v5 重建 documents，搬数据必须一字不差。
@@ -172,7 +232,7 @@ class ProductFoundationTests(unittest.TestCase):
 
         database = Database(paths)
         self.assertIsNone(database.migration_error)
-        self.assertEqual(database.schema_version(), 7)
+        self.assertEqual(database.schema_version(), 8)
 
         row = database.fetchone("SELECT * FROM documents WHERE id = 'doc_a'")
         self.assertEqual(row["relative_path"], "a.md")

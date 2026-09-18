@@ -866,6 +866,10 @@ class MaterialService:
             "query": query, "index_version": snapshot.version_id,
             "retrieval_mode": requested, "effective_mode": "hybrid" if hybrid else "bm25",
             "results": [{
+                # 来源分层的第一层：检索拿到的片段一律属于"你的笔记"。
+                # 记忆层与联网层各自在生成侧追加，用同一个 origin 字段区分，
+                # 所以前端按 origin 分组即可，不需要知道各自的来路。
+                "origin": "note",
                 "chunk_id": hit.chunk["id"], "document_id": hit.chunk["document_id"],
                 "version_id": hit.chunk["version_id"], "title": hit.chunk["document_title"],
                 "media_type": hit.chunk["media_type"], "heading_path": hit.chunk["heading_path"],

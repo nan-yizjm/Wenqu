@@ -36,12 +36,15 @@ ALLOWED_SETTINGS = {
     # 检索参数（见 materials.RETRIEVAL_PARAMETERS）。界面上没有开关，只为单变量
     # 实验开放：默认值就是产品一直以来的行为。
     "candidate_k", "rrf_k", "bm25_k1", "bm25_b", "heading_repeat",
+    # 记忆开关。默认关；关着时产品**根本不会调用**记忆提供者（见 chat.py）。
+    "memory_enabled",
 }
 DEFAULT_SETTINGS = {
     "provider": "ollama", "ollama_base_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen2.5:7b", "onboarding_complete": False,
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
     "deepseek_model": "deepseek-chat", "theme": "system",
+    "memory_enabled": False,
     **{key: default for key, (default, _, _, _) in RETRIEVAL_PARAMETERS.items()},
 }
 SOURCE_MEDIA_TYPES = {
@@ -66,6 +69,7 @@ class SettingsPatch(BaseModel):
     bm25_k1: float | None = Field(default=None, gt=0.0, le=10.0)
     bm25_b: float | None = Field(default=None, ge=0.0, le=1.0)
     heading_repeat: int | None = Field(default=None, ge=0, le=10)
+    memory_enabled: bool | None = None
 
     @field_validator("provider")
     @classmethod
@@ -159,10 +163,30 @@ def current_settings(database: Database):
     return {**DEFAULT_SETTINGS, **{key: stored[key] for key in stored if key in ALLOWED_SETTINGS}}
 
 
+def memory_state(chat) -> dict:
+    """记忆接缝的状态，供诊断上报。
+
+    诊断接口不该被第三方记忆实现拖垮：条目数是调用提供者才拿得到的，所以整段
+    包在 try 里，实现抛异常时只把类型名报出来，不让 `/api/v1/system/diagnostics`
+    跟着失败。
+    """
+    if chat is None:
+        return {"available": False}
+    provider = chat.memory
+    state = {"available": True, "provider": getattr(provider, "name", "unknown")}
+    try:
+        state["items"] = len(provider.list(limit=1000))
+    except Exception as error:  # 第三方实现的问题不该让诊断接口失败
+        state["items"] = None
+        state["error"] = type(error).__name__
+    return state
+
+
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                        static_dir: Path | None = None, shutdown_callback=None,
                        retrieval_model_manager=None, material_run_inline=False,
-                       chat_client_factory=None, material_encoder_factory=None):
+                       chat_client_factory=None, material_encoder_factory=None,
+                       memory_provider_factory=None):
     paths = (paths or ProductPaths.default()).ensure()
     credentials = credential_store or CredentialStore()
     model_manager = retrieval_model_manager or RetrievalModelManager(paths.model_cache)
@@ -197,7 +221,10 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             app.state.materials.ensure_vector_index()
             app.state.chat = ChatService(
                 app.state.database, app.state.materials, credentials,
-                lambda: current_settings(app.state.database), chat_client_factory)
+                lambda: current_settings(app.state.database), chat_client_factory,
+                # 记忆提供者的注入点。不传就是没有记忆（`NullMemoryProvider`），
+                # 出厂行为与"接缝不存在"逐字段一致。接入真实记忆系统时只改这里。
+                memory=memory_provider_factory() if memory_provider_factory else None)
             app.state.organize = OrganizeService(app.state.database, paths)
             app.state.support = SupportService(
                 app.state.database, paths, lambda: current_settings(app.state.database),
@@ -640,6 +667,9 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                 "model_cache_exists": paths.model_cache.is_dir(),
             },
             "credentials": {"deepseek_configured": request.app.state.credentials.has_deepseek()},
+            "memory": memory_state(request.app.state.chat)
+                      | {"enabled": bool(current_settings(request.app.state.database)
+                                         .get("memory_enabled"))},
             "runtime": request.app.state.runtime_state,
             "retrieval_model": request.app.state.retrieval_model.status(),
         }

@@ -211,14 +211,17 @@ class OrganizeService:
                  message["provider"], message["model"], message["index_version"],
                  message["completed_at"], now, now))
             for source in sources:
+                # `origin` 必须一起复制：收藏页和问答页的来源列表用同一个形状，
+                # 少一列的话收藏里的记忆/网络来源就退化成"看着像笔记"，
+                # 而用户恰恰是为了核对依据才收藏的（有测试固定形状一致）。
                 connection.execute("""INSERT INTO favorite_sources(favorite_id, label, position,
                     chunk_id, document_id, version_id, title, media_type, heading_path, locator_json,
-                    preview, score_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    preview, score_json, origin)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (favorite_id, source["label"], source["position"], source["chunk_id"], source["document_id"],
                      source["version_id"], source["title"], source["media_type"],
                      source["heading_path"], source["locator_json"], source["preview"],
-                     source["score_json"]))
+                     source["score_json"], source["origin"]))
         return self._favorite(favorite_id)
 
     def update_favorite(self, favorite_id, title=None, note=None, tags=None):

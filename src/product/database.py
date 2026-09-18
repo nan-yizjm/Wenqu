@@ -213,6 +213,10 @@ MIGRATIONS = {
     7: """
         ALTER TABLE favorites ADD COLUMN tags_json TEXT;
     """,
+    8: """
+        ALTER TABLE message_sources ADD COLUMN origin TEXT NOT NULL DEFAULT 'note';
+        ALTER TABLE favorite_sources ADD COLUMN origin TEXT NOT NULL DEFAULT 'note';
+    """,
 }
 
 
