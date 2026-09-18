@@ -138,7 +138,7 @@ function conversationWith(sources: Omit<MessageSource, 'label'>[]): Conversation
     messages: [{
       id: 'a1', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
       status: 'complete', provider: null, model: null, index_version: null,
-      error_code: null, reply_to_message_id: null, web_state: null,
+      error_code: null, reply_to_message_id: null, web_state: null, evidence_note: null,
       sources: sources.map((source, index) => ({ ...source, label: `S${index + 1}` })),
     }],
   }
@@ -226,7 +226,7 @@ describe('ChatPage web notice', () => {
       messages: [{
         id: 'a-new', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
         status: 'complete', provider: null, model: null, index_version: null,
-        error_code: null, reply_to_message_id: null, sources: labelled, web_state: web,
+        error_code: null, reply_to_message_id: null, sources: labelled, web_state: web, evidence_note: null,
       }],
     }
     mocks.detail.mockImplementation(async () => answer)
@@ -252,6 +252,32 @@ describe('ChatPage web notice', () => {
     await ask({ status: 'unconfigured', provider: 'none' })
 
     expect(await screen.findByText(/还没有配置搜索后端/)).toBeInTheDocument()
+  })
+
+  it('shows the trimming note for answers whose evidence was cut to fit the window', async () => {
+    // evidence_note 落了库：流里带一次，重取（桩重放同一条消息）之后仍在。
+    const note = '模型上下文窗口为 8192 token，证据从 8 条减到 5 条；被减掉的条目没有参与生成。'
+    const labelled = [{ ...WEB_SOURCE, label: 'S1' }]
+    const answer: Conversation = {
+      id: 'c1', title: '一个会话', created_at: '2026-01-01', updated_at: '2026-01-01',
+      messages: [{
+        id: 'a-new', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
+        status: 'complete', provider: null, model: null, index_version: null,
+        error_code: null, reply_to_message_id: null, sources: labelled, web_state: null,
+        evidence_note: note,
+      }],
+    }
+    mocks.detail.mockImplementation(async () => answer)
+    mocks.stream.mockImplementation(async (_id: string, _body: unknown, onEvent: (event: unknown) => void) => {
+      onEvent({ type: 'retrieval', message_id: 'a-new', sources: labelled, evidence_note: note })
+      onEvent({ type: 'final', message_id: 'a-new', content: '答案 [S1]。', status: 'complete', sources: labelled })
+    })
+    render(<ChatPage />)
+    const box = await screen.findByPlaceholderText('询问你的资料；Shift + Enter 换行')
+    fireEvent.change(box, { target: { value: 'PagedAttention 是什么？' } })
+    fireEvent.click(screen.getByText('发送'))
+
+    expect(await screen.findByTestId('evidence-note')).toHaveTextContent('没有参与生成')
   })
 
   it('stays quiet for the states that need no explanation', async () => {

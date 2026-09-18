@@ -116,9 +116,9 @@ export function ChatPage() {
     const tempId = `temp-${Date.now()}`
     const optimistic = [...(active.messages || [])]
     if (prompt) optimistic.push({ id: `user-${Date.now()}`, conversation_id: active.id, role: 'user', content: prompt,
-      status: 'complete', provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [], web_state: null })
+      status: 'complete', provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [], web_state: null, evidence_note: null })
     optimistic.push({ id: tempId, conversation_id: active.id, role: 'assistant', content: '', status: 'streaming',
-      provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [], web_state: null })
+      provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [], web_state: null, evidence_note: null })
     setActive({ ...active, messages: optimistic }); setQuestion(''); setBusy(true); setMessage('')
     const abort = new AbortController(); controller.current = abort
     const applyEvent = (event: StreamEvent) => {
@@ -133,6 +133,7 @@ export function ChatPage() {
         if (event.type === 'retrieval') {
           next.sources = event.sources || []
           if (event.web) next.web_state = event.web
+          next.evidence_note = event.evidence_note ?? existing.evidence_note ?? null
         }
         if (event.type === 'generation') { next.provider = event.provider || null; next.model = event.model || null }
         if (event.type === 'token') next.content += event.text || ''
@@ -226,6 +227,8 @@ export function ChatPage() {
             : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}
           {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">
             {sourceChips(item.sources, selected, setSelected)}</div>}
+          {item.role === 'assistant' && item.evidence_note
+            && <p className="hint" data-testid="evidence-note">{item.evidence_note}</p>}
           {item.role === 'assistant' && item.web_state && <WebNotice state={item.web_state} />}
           {item.role === 'assistant' && item.status === 'complete' && item.error_code !== 'guard_rejected' && <div className="answer-actions">
             {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}

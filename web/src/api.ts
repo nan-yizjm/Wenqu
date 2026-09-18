@@ -85,7 +85,7 @@ export type MessageSource = SourceRef & { label: string }
  * 或这条回答没过联网这一层，例如被守卫拦下）。它不从事件里推，也不在界面重新
  * 计算——服务端当时怎么记的，翻出来就是什么。
  */
-export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[]; web_state: WebState | null }
+export type ChatMessage = { id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; status: 'complete' | 'streaming' | 'stopped' | 'failed'; provider: string | null; model: string | null; index_version: string | null; error_code: string | null; reply_to_message_id: string | null; sources: MessageSource[]; web_state: WebState | null; evidence_note: string | null }
 export type Conversation = { id: string; title: string; created_at: string; updated_at: string; message_count?: number; messages?: ChatMessage[] }
 export type FavoriteSummary = { id: string; message_id: string; title: string; note: string; question: string; answer: string; provider: string | null; model: string | null; index_version: string | null; generated_at: string | null; updated_at: string; source_count: number; tags: string[]; libraries: { id: string; name: string }[]; feedback_kind: FeedbackKind | null }
 export type Favorite = FavoriteSummary & { sources: MessageSource[] }
@@ -93,7 +93,7 @@ export type Favorite = FavoriteSummary & { sources: MessageSource[] }
 export type FavoriteFilters = { library?: string; tag?: string; feedback?: FeedbackKind; days?: '7d' | '30d' }
 export type FavoritesView = { favorites: FavoriteSummary[]; libraries: { id: string; name: string }[]; tags: string[]; total: number }
 export type FeedbackKind = 'helpful' | 'missing' | 'citation_wrong' | 'answer_wrong'
-export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; web?: WebState; provider?: string; model?: string; message?: string; citation_warning?: boolean; rejected?: boolean }
+export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; web?: WebState; provider?: string; model?: string; message?: string; citation_warning?: boolean; rejected?: boolean; evidence_note?: string | null }
 
 export type BundledResource = { name: string; size: number; modified_at: string }
 export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResource[] }
@@ -167,6 +167,8 @@ export type Artifact = ArtifactSummary & {
   sources: MessageSource[]
   backlink?: BacklinkReport
   mindmap?: Mindmap | null
+  /** 只有本地模型且证据超窗时非空：来源面板为什么比召回上限少。 */
+  evidence_note?: string | null
 }
 /**
  * 信息图的渲染记录（P4）。
@@ -222,6 +224,7 @@ export type ArtifactStreamEvent = {
   index_version?: string | null
   provider?: string
   model?: string
+  evidence_note?: string | null
 }
 /**
  * 记忆接缝的运行状态。`items` 单独可为 null：条目数要问提供者才拿得到，

@@ -414,6 +414,22 @@ describe('StudioPage infographic export', () => {
   })
 })
 
+describe('StudioPage 的证据裁剪说明', () => {
+  it('final 事件带 evidence_note 时显示在产出区', async () => {
+    await generate([
+      { type: 'retrieval', artifact_id: 'art_1', sources: [source],
+        evidence_note: '模型上下文窗口为 8192 token，证据从 12 条减到 6 条；被减掉的条目没有参与生成。' },
+      { type: 'token', artifact_id: 'art_1', text: '分页管理 KV Cache [S1]。' },
+      { type: 'final', artifact_id: 'art_1', status: 'complete', content: '分页管理 KV Cache [S1]。',
+        sources: [source],
+        evidence_note: '模型上下文窗口为 8192 token，证据从 12 条减到 6 条；被减掉的条目没有参与生成。',
+        backlink: report() },
+    ])
+
+    expect(await screen.findByTestId('live-evidence-note')).toHaveTextContent('没有参与生成')
+  })
+})
+
 describe('StudioPage 的批量删除', () => {
   it('选择模式里勾选历史产出，确认文案说明「正在生成会跳过」', async () => {
     mocks.removeBatch.mockResolvedValue({ deleted: 1, skipped: [], files_removed: 1 })

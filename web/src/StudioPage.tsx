@@ -213,6 +213,7 @@ export function StudioPage() {
   const [liveMindmap, setLiveMindmap] = useState<Mindmap | null>(null)
   const [liveStatus, setLiveStatus] = useState<ArtifactStatus>('running')
   const [liveNotice, setLiveNotice] = useState('')
+  const [liveEvidenceNote, setLiveEvidenceNote] = useState('')
   const [message, setMessage] = useState('')
   const [source, setSource] = useState<MessageSource | null>(null)
   const [selecting, setSelecting] = useState(false)
@@ -238,6 +239,7 @@ export function StudioPage() {
   const clearLive = useCallback(() => {
     setDraft(''); setLiveSources([]); setLiveReport(null); setLiveMindmap(null)
     setLiveNotice(''); setLiveStatus('running'); setLiveId(null)
+    setLiveEvidenceNote('')
   }, [])
 
   const open = async (id: string) => {
@@ -255,7 +257,10 @@ export function StudioPage() {
     try {
       await api.streamArtifact(topic.trim(), kind, event => {
         if (event.artifact_id) setLiveId(event.artifact_id)
-        if (event.type === 'retrieval') setLiveSources(event.sources ?? [])
+        if (event.type === 'retrieval') {
+          setLiveSources(event.sources ?? [])
+          setLiveEvidenceNote(event.evidence_note ?? '')
+        }
         else if (event.type === 'token') setDraft(previous => previous + (event.text ?? ''))
         else if (event.type === 'final' || event.type === 'stopped') {
           // 指南的正文以 final 为准（停止时也会带回已写出的部分），token 只是过程。
@@ -378,6 +383,7 @@ export function StudioPage() {
                 ? <AnswerMarkdown content={draft} sources={liveSources} open={setSource} />
                 : <p className="hint">正在等待模型输出…</p>}
             </section>}
+        {liveEvidenceNote && <p className="hint" data-testid="live-evidence-note">{liveEvidenceNote}</p>}
         {liveReport && <BacklinkCard report={liveReport} />}
         {/* 刚生成完就能导出：产出在流里 `final` 之前已经落库为完整状态，
             不必先去左边列表点一次。`key` 保证换一份产出就重挂。 */}
@@ -393,6 +399,7 @@ export function StudioPage() {
               {detail.index_version ? ` · 索引 ${detail.index_version.slice(0, 8)}` : ''}</p></div>
           <button className="ghost" onClick={() => void remove(detail.id)}>删除</button>
         </header>
+        {detail.evidence_note && <p className="hint" data-testid="evidence-note">{detail.evidence_note}</p>}
         {detail.status === 'failed' && <p className="error">
           {detail.error_code === 'no_evidence'
             ? '当时资料里没有找到与这个主题相关的片段，所以没有产出内容。'
