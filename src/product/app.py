@@ -27,6 +27,7 @@ from .resources import bundled_docs, bundled_examples, resolve_bundled
 from .folder_browser import list_directory
 from .chat import ChatService
 from .organize import OrganizeService
+from .studio import ARTIFACT_KINDS, StudioService
 from .support import MAX_BACKUP_BYTES, SupportService
 
 
@@ -160,6 +161,22 @@ class ResourceImportBody(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
+class ArtifactBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    topic: str = Field(min_length=1, max_length=200)
+    # 只允许 guide / mindmap：产出的种类决定了它有没有模型参与，不能由前端随手
+    # 传一个字符串进来。默认 guide 是"更贵、更可能有错"的那一种，让它做默认值
+    # 反而更容易被看到。
+    kind: str = "guide"
+
+    @field_validator("kind")
+    @classmethod
+    def kind_allowed(cls, value):
+        if value not in ARTIFACT_KINDS:
+            raise ValueError("产出类型只能是 guide 或 mindmap")
+        return value
+
+
 def current_settings(database: Database):
     """只暴露可回写的键。
 
@@ -190,9 +207,23 @@ def memory_state(chat) -> dict:
     return state
 
 
+def studio_state(database) -> dict:
+    """产出的状态，供诊断上报。
+
+    只按状态数个数，不读正文：诊断页要能在"产出很多"时不变成一次全表扫描。
+    查不动就报 `available: False`——诊断接口本身不该被产出拖垮。
+    """
+    try:
+        rows = database.fetchall(
+            "SELECT status, COUNT(*) count FROM artifacts GROUP BY status")
+    except Exception:
+        return {"available": False}
+    return {"available": True,
+            "by_status": {row["status"]: row["count"] for row in rows}}
+
+
 def web_state(chat, settings: dict) -> dict:
     """联网接缝的状态，供诊断上报。
-
     与记忆不同，这里**不向后端要任何东西**：搜索协议没有"列出已有结果"这种便宜
     调用，诊断不该为了显示一个数字去发一次请求——那等于让"打开诊断页"变成一次
     出网。所以这个函数全程只读本机状态，不需要 try。
@@ -237,7 +268,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                                    {"status": "not_configured", "detail": None})
         app.state.restore_pending = False
         if app.state.database.migration_error:
-            app.state.materials = app.state.chat = app.state.organize = app.state.support = None
+            app.state.materials = app.state.chat = app.state.organize = None
+            app.state.support = app.state.studio = None
         else:
             app.state.materials = MaterialService(
                 app.state.database, paths, run_inline=material_run_inline,
@@ -254,6 +286,11 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                 # 此时即使把开关打开也不会发出任何请求。接入真实后端时只改这里。
                 web=search_provider_factory() if search_provider_factory else None)
             app.state.organize = OrganizeService(app.state.database, paths)
+            # 产出与问答共用同一个 `chat_client_factory`：用哪个模型只在一处决定，
+            # 否则会出现"问答走 Ollama、产出偷偷走 DeepSeek"这种要翻配置才发现的事。
+            app.state.studio = StudioService(
+                app.state.database, app.state.materials,
+                lambda: current_settings(app.state.database), credentials, chat_client_factory)
             app.state.support = SupportService(
                 app.state.database, paths, lambda: current_settings(app.state.database),
                 credentials, lambda: app.state.runtime_state)
@@ -667,6 +704,71 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "invalid_feedback", "message": str(error)},
                                 status_code=422)
 
+    @app.post("/api/v1/artifacts/stream")
+    async def stream_artifact(body: ArtifactBody, request: Request):
+        """产出一份指南或思维导图。
+
+        复用问答那套流式通道（`application/x-ndjson`），所以前端只需要一套解析：
+        `retrieval`（来源与编号）→ 若干 `token`（思维导图没有）→ `final`（带
+        `backlink` 报告）。**不另起 job 机制**：`import_jobs` 是资料导入专用的，
+        界面上的"正在处理"横幅读它，混进来会出现"正在导入 1 份资料"其实是在写指南。
+        """
+        service = request.app.state.studio
+        try:
+            service.validate_request(body.topic, body.kind)
+        except ValueError as error:
+            return JSONResponse({"error": "invalid_artifact", "message": str(error)},
+                                status_code=422)
+        cancel = threading.Event()
+        iterator = service.stream(body.topic, body.kind, cancel)
+
+        async def events():
+            try:
+                async for event in iterate_in_threadpool(iterator):
+                    if await request.is_disconnected():
+                        cancel.set()
+                        break
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            finally:
+                cancel.set()
+                close = getattr(iterator, "close", None)
+                if close:
+                    close()
+
+        return StreamingResponse(events(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/api/v1/artifacts")
+    async def artifacts(request: Request):
+        return {"artifacts": request.app.state.studio.list_artifacts()}
+
+    @app.get("/api/v1/artifacts/{artifact_id}")
+    async def get_artifact(artifact_id: str, request: Request):
+        try:
+            return request.app.state.studio.get_artifact(artifact_id)
+        except KeyError as error:
+            return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.delete("/api/v1/artifacts/{artifact_id}")
+    async def delete_artifact(artifact_id: str, request: Request):
+        try:
+            return request.app.state.studio.delete_artifact(artifact_id)
+        except KeyError as error:
+            return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except RuntimeError as error:
+            return JSONResponse({"error": "artifact_busy", "message": str(error)},
+                                status_code=409)
+
+    @app.post("/api/v1/artifacts/{artifact_id}/stop")
+    async def stop_artifact(artifact_id: str, request: Request):
+        try:
+            return request.app.state.studio.stop(artifact_id)
+        except KeyError as error:
+            return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
     @app.get("/api/v1/documents/{document_id}/versions/{version_id}/source")
     async def document_source(document_id: str, version_id: str, request: Request):
         try:
@@ -709,6 +811,7 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                                          .get("memory_enabled"))},
             "web": web_state(request.app.state.chat,
                              current_settings(request.app.state.database)),
+            "studio": studio_state(request.app.state.database),
             "runtime": request.app.state.runtime_state,
             "retrieval_model": request.app.state.retrieval_model.status(),
         }

@@ -72,7 +72,10 @@ def source_record(row) -> dict:
     record = dict(row)
     record["locator"] = json.loads(record.pop("locator_json"))
     record.update(json.loads(record.pop("score_json", None) or "null") or NO_SCORE)
-    for key in ("id", "message_id", "favorite_id", "position"):
+    # 三个来源表（message_sources / favorite_sources / artifact_sources）的外键列名
+    # 不同，读回来的形状必须一致，否则前端要为"消息来源""收藏来源""产出来源"各写
+    # 一套判断——那正是这张表当初对齐 `message_sources` 形状要避免的事。
+    for key in ("id", "message_id", "favorite_id", "artifact_id", "position"):
         record.pop(key, None)
     return record
 
@@ -88,6 +91,35 @@ def _row_message(row, sources=()):
         "error_code": row["error_code"], "created_at": row["created_at"],
         "completed_at": row["completed_at"], "sources": list(sources),
     }
+
+
+def default_chat_client(settings, credentials):
+    """按设置挑一个对话后端。
+
+    放在模块级是为了让产出（`studio.py`）复用同一处。两处各写一份的话，将来
+    加一个 provider 只会改到其中一处，而症状是"问答能用、产出报 key 未配置"。
+    """
+    if settings["provider"] == "ollama":
+        return OllamaClient(model=settings["ollama_model"],
+                            base_url=settings["ollama_base_url"])
+    key = credentials.get_deepseek()
+    if not key:
+        raise RuntimeError("deepseek_not_configured")
+    return DeepSeekClient(model=settings.get("deepseek_model", "deepseek-chat"), api_key=key)
+
+
+def safe_error(error):
+    """把生成侧异常转成 `(错误码, 面向用户的话)`。
+
+    同样上提到模块级：同类失败在问答页与产出页必须显示同一句话，否则用户会
+    以为是两个不同的问题。
+    """
+    text = str(error)
+    if text == "deepseek_not_configured":
+        return "deepseek_not_configured", "尚未配置 DeepSeek API Key，请前往设置。"
+    if "Ollama" in text:
+        return "ollama_unavailable", "无法使用本机 Ollama，请确认服务已启动且模型已下载。"
+    return "generation_failed", "生成暂时失败，请检查模型设置后重试。"
 
 
 class ChatService:
@@ -110,13 +142,9 @@ class ChatService:
                 (utc_now(),))
 
     def _default_client(self, settings):
-        if settings["provider"] == "ollama":
-            return OllamaClient(model=settings["ollama_model"],
-                                base_url=settings["ollama_base_url"])
-        key = self.credentials.get_deepseek()
-        if not key:
-            raise RuntimeError("deepseek_not_configured")
-        return DeepSeekClient(model=settings.get("deepseek_model", "deepseek-chat"), api_key=key)
+        """保留为实例方法：历史上是默认客户端的唯一构造点，测试与子类按这个
+        名字覆写过。实现已上提到 `default_chat_client` 供产出复用。"""
+        return default_chat_client(settings, self.credentials)
 
     def create_conversation(self, title="新会话"):
         conversation_id, now = _id("conv"), utc_now()
@@ -314,12 +342,8 @@ class ChatService:
 
     @staticmethod
     def _safe_error(error):
-        text = str(error)
-        if text == "deepseek_not_configured":
-            return "deepseek_not_configured", "尚未配置 DeepSeek API Key，请前往设置。"
-        if "Ollama" in text:
-            return "ollama_unavailable", "无法使用本机 Ollama，请确认服务已启动且模型已下载。"
-        return "generation_failed", "生成暂时失败，请检查模型设置后重试。"
+        """保留为静态方法（调用点在此），实现已上提到 `safe_error`。"""
+        return safe_error(error)
 
     def stop(self, conversation_id, message_id):
         row = self.database.fetchone("""SELECT status, content FROM messages
