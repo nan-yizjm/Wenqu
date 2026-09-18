@@ -30,7 +30,7 @@ class ProductFoundationTests(unittest.TestCase):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"]["status"], "not_configured")
-        self.assertEqual(health.json()["database_schema"], 9)
+        self.assertEqual(health.json()["database_schema"], 10)
         self.assertTrue(self.paths.database.is_file())
         self.assertFalse(self.client.get("/api/v1/setup").json()["steps"]["retrieval_model"])
 
@@ -86,12 +86,12 @@ class ProductFoundationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version = 2")
             connection.commit()
         database = Database(paths)
-        self.assertEqual(database.schema_version(), 9)
+        self.assertEqual(database.schema_version(), 10)
         self.assertTrue(database.fetchone(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
         # 备份名用的是**最后一个待执行版本**（database.py 的 pending[-1]），
         # 不是用户升级前的版本号。加新迁移时这行要跟着改。
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v9-*.sqlite3"))), 1)
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v10-*.sqlite3"))), 1)
 
     def test_upgrading_a_v7_database_backfills_the_note_layer(self):
         """v7 → v8 是用户升级时真正会走的那条路，存量行必须被补成 'note'。
@@ -130,12 +130,44 @@ class ProductFoundationTests(unittest.TestCase):
 
         database = Database(paths)
         self.assertIsNone(database.migration_error)
-        self.assertEqual(database.schema_version(), 9)
+        self.assertEqual(database.schema_version(), 10)
         self.assertEqual(database.fetchone(
             "SELECT origin FROM message_sources WHERE label='S1'")["origin"], "note")
         self.assertEqual(database.fetchone(
             "SELECT origin FROM favorite_sources WHERE label='S1'")["origin"], "note")
-        self.assertEqual(len(list(paths.backups.glob("workspace-before-v9-*.sqlite3"))), 1)
+        # v10 加的是"这轮有没有出过网"。**旧行必须是 NULL（没有记录），不许被补成
+        # 'off'**：那时候这个字段还不存在，写成 'off' 等于替一条可能真的联过网的
+        # 旧回答作证。界面按 NULL 显示"没有记录"，那是当时的实情。
+        self.assertIsNone(database.fetchone(
+            "SELECT web_state_json FROM messages WHERE id='msg_a'")["web_state_json"])
+        self.assertEqual(len(list(paths.backups.glob("workspace-before-v10-*.sqlite3"))), 1)
+
+    def test_a_v9_database_upgrades_without_losing_its_turns(self):
+        """v9 → v10 是**装了 0.2.1 的人**升级时真正会走的那条路。
+
+        v10 只是想给"这轮有没有出过网"补一个记录位，它不该动到任何已有东西：
+        会话、消息正文、来源都原样，只有那个新列是 NULL——**没有记录**，不是 "off"。
+        """
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "补记录数据").ensure()
+        with closing(sqlite3.connect(paths.database)) as connection:
+            for version in range(1, 10):
+                connection.executescript(MIGRATIONS[version])
+            connection.execute("PRAGMA user_version = 9")
+            connection.execute("""INSERT INTO conversations(id, title, created_at, updated_at)
+                VALUES ('conv_b', '旧会话', 'c', 'u')""")
+            connection.execute("""INSERT INTO messages(id, conversation_id, role, content,
+                    status, created_at)
+                VALUES ('msg_b', 'conv_b', 'assistant', '旧回答正文', 'complete', 'c')""")
+            connection.commit()
+
+        database = Database(paths)
+        self.assertIsNone(database.migration_error)
+        self.assertEqual(database.schema_version(), 10)
+        self.assertEqual(database.fetchone(
+            "SELECT content FROM messages WHERE id='msg_b'")["content"], "旧回答正文")
+        self.assertIsNone(database.fetchone(
+            "SELECT web_state_json FROM messages WHERE id='msg_b'")["web_state_json"])
 
     def test_migration_failure_starts_recovery_mode_and_restores_backup(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
@@ -191,6 +223,11 @@ class ProductFoundationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE name='artifacts'").fetchone())
                     self.assertIsNone(probe.execute(
                         "SELECT name FROM sqlite_master WHERE name='artifact_sources'").fetchone())
+                    # v10 的 ADD COLUMN 排在被弄坏的 v9 之后，本该根本没跑到；
+                    # 断言它在，是为了钉住"整批迁移在同一个事务里"这件事。
+                    self.assertIsNone(probe.execute(
+                        "SELECT name FROM pragma_table_info('messages')"
+                        " WHERE name='web_state_json'").fetchone())
                 self.assertEqual(client.get("/api/v1/search", params={"q": "RAG"}).status_code,
                                  503)
                 restored = client.post("/api/v1/system/recovery/restore", json={
@@ -201,8 +238,8 @@ class ProductFoundationTests(unittest.TestCase):
             MIGRATIONS[9] = real_nine
         reopened = Database(paths)
         self.assertIsNone(reopened.migration_error)
-        # 失败的那次已被回滚，重开时会拿**真的** v9 再跑一遍，所以这里到 9。
-        self.assertEqual(reopened.schema_version(), 9)
+        # 失败的那次已被回滚，重开时会拿**真的** v9 再跑一遍，再接着跑到 v10。
+        self.assertEqual(reopened.schema_version(), 10)
 
     def test_documents_table_rebuild_keeps_rows_and_widens_media_type(self):
         """v5 重建 documents，搬数据必须一字不差。
@@ -237,7 +274,7 @@ class ProductFoundationTests(unittest.TestCase):
 
         database = Database(paths)
         self.assertIsNone(database.migration_error)
-        self.assertEqual(database.schema_version(), 9)
+        self.assertEqual(database.schema_version(), 10)
 
         row = database.fetchone("SELECT * FROM documents WHERE id = 'doc_a'")
         self.assertEqual(row["relative_path"], "a.md")

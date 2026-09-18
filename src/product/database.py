@@ -257,6 +257,18 @@ MIGRATIONS = {
         CREATE INDEX idx_artifact_sources_artifact ON artifact_sources(artifact_id, position);
         CREATE INDEX idx_artifacts_created ON artifacts(created_at);
     """,
+    # 联网状态。存 JSON 而不是一个枚举列，因为"没联网"本身有四种不同的原因
+    # （关着 / 没配后端 / 问了没结果 / 查询失败），而"查询失败"还要带上异常名与
+    # 后端名。这是回答的**事实记录**，不是临时 UI 状态：刷新或换台机器打开这条
+    # 会话，都还应该看得出当时到底走没走网。
+    #
+    # 旧行留 NULL。NULL 表示"这条回答没有联网记录"——可能是它写于 v10 之前，
+    # 也可能是它压根没过联网这一层（例如被能力守卫拦下）。两种都不该在界面
+    # 上标成任何一句关于联网的话，尤其不能补成 'off'：那是替历史编了一句
+    # "当时没联网"，而我们并不知道。
+    10: """
+        ALTER TABLE messages ADD COLUMN web_state_json TEXT;
+    """,
 }
 
 

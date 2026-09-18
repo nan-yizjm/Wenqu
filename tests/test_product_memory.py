@@ -98,10 +98,15 @@ class MemorySeamTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_schema_is_version_nine(self):
+    def test_schema_is_version_ten(self):
+        """钉住这次发布带出去的库版本。
+
+        每次加迁移都要改这里的字面量，是**故意的**：记忆层借用来源表存条目，
+        它自己不该带来版本变化，所以这个数字的每一次变动都该有人在提交里解释。
+        """
         self.build()
 
-        self.assertEqual(self.app.state.database.schema_version(), 9)
+        self.assertEqual(self.app.state.database.schema_version(), 10)
 
     def test_the_note_layer_is_marked_in_payload_and_in_the_database(self):
         self.build()

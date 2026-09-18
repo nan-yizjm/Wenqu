@@ -90,6 +90,9 @@ def _row_message(row, sources=()):
         "index_version": row["index_version"], "retrieval_query": row["retrieval_query"],
         "error_code": row["error_code"], "created_at": row["created_at"],
         "completed_at": row["completed_at"], "sources": list(sources),
+        # `None` 而不是 `{"status": "off"}`：没有记录和"当时确实没联网"是两件事，
+        # 前者不该在界面上被说成一个结论。
+        "web_state": json.loads(row["web_state_json"]) if row["web_state_json"] else None,
     }
 
 
@@ -232,12 +235,13 @@ class ChatService:
             connection.execute("""
                 INSERT INTO messages(id, conversation_id, role, content, status,
                     reply_to_message_id, retry_of_message_id, provider, model, index_version,
-                    retrieval_query, error_code, created_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retrieval_query, error_code, web_state_json, created_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (message_id, conversation_id, role, content, status,
                   fields.get("reply_to_message_id"), fields.get("retry_of_message_id"),
                   fields.get("provider"), fields.get("model"), fields.get("index_version"),
-                  fields.get("retrieval_query"), fields.get("error_code"), now,
+                  fields.get("retrieval_query"), fields.get("error_code"),
+                  fields.get("web_state_json"), now,
                   now if status == "complete" else None))
             connection.execute("UPDATE conversations SET updated_at=? WHERE id=?",
                                (now, conversation_id))
@@ -422,7 +426,11 @@ class ChatService:
         assistant_id = self._message(conversation_id, "assistant", "", "streaming",
             reply_to_message_id=user_message_id, retry_of_message_id=retry_of,
             provider=provider, model=model, index_version=retrieval["index_version"],
-            retrieval_query=retrieval_query)
+            retrieval_query=retrieval_query,
+            # 和来源一起落库。联网状态在流式事件里只出现一次，不入库的话刷新界面
+            # 就再也说不出"这轮到底联没联上"，等于把一次可核查的事实变成了一次
+            # 转瞬即逝的提示。
+            web_state_json=json.dumps(web_state, ensure_ascii=False))
         self._sources(assistant_id, results)
         # 出的键必须与落库的完全一致：少了分数，刚答完就没有相关度、翻旧的才有；
         # 多了原始通道分，实时消息会带上重放后消失的键，前端就得处理两种形状。
