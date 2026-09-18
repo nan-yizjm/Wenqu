@@ -466,7 +466,126 @@ const clickByText = (text, scope) => `(() => {
           `${listed} -> ${remaining}`);
   }
 
-  // ---- 12. 退出入口：正常使用下必须存在，且不许把"关标签"当成退出 ----
+  // ---- 13. 批量删除：资料库页的完整选择 → 确认 → 删除流程 ----
+  // 造两篇专用资料（fetch 直传，绕开无头环境里点不开的文件选择器），从界面上
+  // 走完"批量选择 → 勾选 → 确认 → 删除"，最后从服务端核对它们真的没了——
+  // 造的数据自己收走。**只勾自己造的行**：实例里可能还有用户的真实资料，
+  // 全选会把它们一起送进删除请求。
+  const uploadDoc = async name => {
+    const fd = new FormData();
+    fd.append('file', new File([`# ${name}\n\n批量删除验收专用内容。`], `${name}.md`,
+      { type: 'text/markdown' }));
+    return fetch(`${APP}api/v1/documents/upload`, { method: 'POST', body: fd }).then(r => r.json());
+  };
+  const uploadA = await uploadDoc('批量删除验收甲');
+  const uploadB = await uploadDoc('批量删除验收乙');
+  check('验收用资料上传成功', !!uploadA.document_id && !!uploadB.document_id,
+        JSON.stringify([uploadA, uploadB]));
+  const madeIds = [uploadA.document_id, uploadB.document_id].filter(Boolean);
+
+  // fetch 直传不触发界面刷新（只有页面上的上传控件才会），所以等作业完成后
+  // 切走再切回，让 LibraryPage 重新挂载加载——这是脚本绕开 UI 上传的副作用，
+  // 不是产品缺陷：真实用户从界面上传，列表立即更新。
+  let seen = false;
+  for (let i = 0; i < 15 && !seen; i++) {
+    await sleep(2000);
+    await s.eval(`(() => { const b=[...document.querySelectorAll('nav button')].find(x=>x.textContent.includes('知识问答')); if(b) b.click(); })()`);
+    await sleep(700);
+    await s.eval(`(() => { const b=[...document.querySelectorAll('nav button')].find(x=>x.textContent.includes('资料库')); if(b) b.click(); })()`);
+    await sleep(1200);
+    seen = await s.eval(`['批量删除验收甲', '批量删除验收乙'].every(name =>
+      [...document.querySelectorAll('.document-row')].some(r => r.textContent.includes(name)))`);
+  }
+  check('两篇验收资料出现在资料列表里', seen === true, '');
+
+  const entry = await s.eval(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === '批量选择');
+    if (!b) return { 存在: false };
+    b.click(); return { 存在: true };
+  })()`);
+  check('资料库页有「批量选择」入口', entry.存在 === true, JSON.stringify(entry));
+  await sleep(400);
+  const idleBar = await s.eval(`(() => {
+    const count = document.querySelector('.batch-count');
+    const del = document.querySelector('[data-testid="batch-confirm"]');
+    return { 条: !!count, 计数: count ? count.textContent.replace(/\\s+/g, '') : '',
+      删除禁用: del ? del.disabled : null };
+  })()`);
+  check('进入选择模式：0 选中时删除不可点',
+        idleBar.计数 === '已选0项' && idleBar.删除禁用 === true, JSON.stringify(idleBar));
+
+  // 勾选自己造的第一篇。checkbox 的 change 由真实点击触发。
+  const tick = name => s.eval(`(() => {
+    const row = [...document.querySelectorAll('.document-row')]
+      .find(r => r.textContent.includes(${JSON.stringify(name)}));
+    const box = row && row.querySelector('.batch-check');
+    if (!box) return 'no-row';
+    if (box.checked) return 'already';
+    box.click(); return 'ok';
+  })()`);
+  check('勾选「批量删除验收甲」', await tick('批量删除验收甲') === 'ok', '');
+  await sleep(300);
+  const onePicked = await s.eval(`document.querySelector('.batch-count').textContent.replace(/\\s+/g, '')`);
+  check('勾选后计数变成 1 项', onePicked === '已选1项', onePicked);
+
+  await s.eval(`document.querySelector('[data-testid="batch-confirm"]').click()`);
+  await sleep(400);
+  const batchConfirm = await s.eval(`(() => {
+    const box = document.querySelector('.batch-confirm');
+    if (!box) return { 出现: false };
+    return { 出现: true, 文字: box.textContent };
+  })()`);
+  check('批量删除第一下只展开确认，不直接删',
+        batchConfirm.出现 === true, JSON.stringify(batchConfirm));
+  check('资料确认框写明「原文件不会被删除」',
+        /原文件不会被删除/.test(batchConfirm.文字 || ''), JSON.stringify(batchConfirm));
+  await s.shot('accept-batch-confirm.png', 1440, 900);
+  // 甲乙都是上传来源，不涉及文件夹；确认框不该把"暂时移除"那句也对上传资料说。
+  check('上传来源不触发「暂时移除」的说明',
+        !/暂时移除/.test(batchConfirm.文字 || ''), JSON.stringify(batchConfirm));
+
+  await s.eval(`(() => {
+    const box = document.querySelector('.batch-confirm');
+    const b = box && [...box.querySelectorAll('button')].find(x => x.textContent.trim() === '再想想');
+    if (b) b.click();
+  })()`);
+  await sleep(300);
+  check('「再想想」收起确认框且什么都没删',
+        await s.eval(`!document.querySelector('.batch-confirm')`) === true, '');
+
+  check('勾选「批量删除验收乙」', await tick('批量删除验收乙') === 'ok', '');
+  await sleep(300);
+  const twoPicked = await s.eval(`document.querySelector('.batch-count').textContent.replace(/\\s+/g, '')`);
+  check('两篇都勾上后计数是 2 项', twoPicked === '已选2项', twoPicked);
+
+  await s.eval(`document.querySelector('[data-testid="batch-confirm"]').click()`);
+  await sleep(400);
+  await s.eval(`document.querySelector('[data-testid="batch-confirm"]').click()`);
+  // 删除请求 + 列表刷新（实测端点约 1.4 秒，给结果条留足时间）。
+  let resultText = '';
+  for (let i = 0; i < 40; i++) {
+    const box = await s.eval(`(() => {
+      const box = document.querySelector('[data-testid="batch-result"]');
+      return box ? box.textContent : '';
+    })()`);
+    if (box) { resultText = box; break; }
+    await sleep(500);
+  }
+  check('删除后如实报告「已删除 2 项」', /已删除 2 项/.test(resultText), resultText);
+
+  await s.eval(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === '完成');
+    if (b) b.click();
+  })()`);
+  await sleep(800);
+  // 判据落在服务端：列表里不再有这两篇，且它们的 id 已经查不到。
+  const docsAfter = await fetch(`${APP}api/v1/documents`).then(r => r.json());
+  const remainingIds = (docsAfter.documents || []).map(x => x.id);
+  check('服务端确认两篇验收资料已被移除',
+        madeIds.every(id => !remainingIds.includes(id)),
+        `剩余 ${remainingIds.length} 篇`);
+
+  // ---- 14. 退出入口：正常使用下必须存在，且不许把"关标签"当成退出 ----
   // 这一段默认**不真的退出**：退出会把正在被验收的这个实例关掉，跑完就没得看了。
   // 要真走一遍，设 UI_ACCEPT_EXIT=1——那一次运行的收尾就是"应用确实停了"。
   // （放在自造产出被删掉之后：先退出了，那个 DELETE 就发不出去了。）
