@@ -883,9 +883,23 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
 
     @app.post("/api/v1/system/shutdown")
     async def shutdown():
-        if shutdown_callback:
-            shutdown_callback()
-        return {"status": "shutting_down"}
+        """让启动器退出。
+
+        **没有启动器时如实报错，而不是报成功。** 界面拿这个响应决定要不要显示"已退出"，
+        所以在这里说谎会直接变成一句假话：用户看到"工作台已退出"，进程却还在跑。这与
+        联网那一块"没有后端就说未配置、不说没搜到"是同一条线。
+
+        退出**不删数据**，这句话由接口自己带出去而不是只写在前端文案里——它是这个动作
+        唯一的对外承诺。
+        """
+        if not shutdown_callback:
+            return JSONResponse(
+                {"error": "shutdown_unavailable",
+                 "message": "这个实例没有连接启动器，无法自行退出；请结束它的进程。"},
+                status_code=503)
+        shutdown_callback()
+        return {"status": "shutting_down",
+                "message": "本地服务正在退出。资料、索引和会话都会留在原处。"}
 
     resolved_static = static_dir or bundle_root() / "web" / "dist"
     assets = resolved_static / "assets"

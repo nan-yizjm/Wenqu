@@ -116,5 +116,45 @@ class ProductSupportTests(unittest.TestCase):
             self.assertNotIn(str(paths.root), report)
 
 
+class ShutdownTests(unittest.TestCase):
+    """退出这件事只有两种诚实回答：**我让启动器停了**，或者**我停不了**。
+
+    产品是个常驻的本地服务（`console=False`、没有托盘），所以"退出"只能由启动器做到。
+    一个没有接启动器的实例如果回答"正在退出"，界面就会显示"已退出"而进程还活着——
+    这正是这个项目在联网那一块守过的同一条线：**做不到就说做不到，别报成功**。
+    """
+
+    def build(self, **kwargs):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "产品数据")
+        return create_product_app(
+            paths, MemoryCredentialStore(), retrieval_model_manager=MemoryRetrievalModelManager(),
+            material_run_inline=True, chat_client_factory=lambda _settings: AnswerClient(), **kwargs)
+
+    def test_an_instance_without_a_launcher_says_it_cannot_quit(self):
+        with TestClient(self.build(), base_url="http://127.0.0.1:8765") as client:
+            response = client.post("/api/v1/system/shutdown")
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["error"], "shutdown_unavailable")
+            # 说清楚"为什么"和"那怎么办"：光说失败用户不知道下一步该做什么。
+            self.assertIn("启动器", response.json()["message"])
+
+    def test_a_launcher_backed_instance_asks_to_exit_and_states_what_survives(self):
+        calls = []
+        with TestClient(self.build(shutdown_callback=lambda: calls.append(1)),
+                        base_url="http://127.0.0.1:8765") as client:
+            response = client.post("/api/v1/system/shutdown")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "shutting_down")
+            self.assertEqual(len(calls), 1)
+            # 退出不是删数据。这句话必须由接口自己说出来，不能只靠前端文案。
+            self.assertIn("资料", response.json()["message"])
+            # 连点两次不该出问题：界面上的按钮可能被点两下。
+            self.assertEqual(client.post("/api/v1/system/shutdown").status_code, 200)
+            self.assertEqual(len(calls), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
