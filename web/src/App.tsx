@@ -75,6 +75,15 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
   // 但既然会影响名次就如实说出来，不假装索引是完美的。
   const truncated = vector.status === 'ready' ? vector.truncated_chunks ?? 0 : 0
   const truncationNote = truncated ? `其中 ${truncated} 个片段超出模型长度上限，语义检索只用得到前半段。` : ''
+  // 记忆接缝的真实状态。条目数要问提供者才拿得到，所以它可能单独失败——那种
+  // 情况下如实说是读取出错，而不是把 0 当成"没有记忆"报出去。
+  const memory = diagnostics?.memory
+  const memoryText = !memory ? '无法读取记忆状态；本地服务可能刚刚启动。'
+    : !memory.enabled ? '记忆已关闭：工作台不会向记忆提供者读取或写入任何内容。'
+    : memory.provider === 'none' ? '记忆已开启，但当前提供者是内置的空实现，因此不会有任何条目。'
+    : memory.items === null || memory.items === undefined
+      ? `记忆已开启（${memory.provider}），但读取条目数失败：${memory.error || '未知错误'}`
+      : `记忆已开启（${memory.provider}），共 ${memory.items} 条。`
   const vectorText = form.retrieval_mode === 'bm25' ? '当前按词面匹配，不做语义召回。'
     : vector.status === 'ready' ? `语义索引已就绪，搜索同时使用关键词与语义。${truncationNote}`
     : vector.status === 'building' ? '正在后台建立语义索引，完成前仍按关键词检索。'
@@ -110,6 +119,14 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
       </div>
         <p className="hint">关键词检索按词面匹配，改个说法就可能搜不到。混合检索会把语义相近的片段也召回，代价是先在后台把全部片段编码一遍，长资料首次需要几分钟。</p>
         <div className="status-line"><span className={`dot ${vectorTone}`} />{vectorText}</div></section>
+      <section className="card"><h3>记忆</h3><div className="segmented">
+        <button className={form.memory_enabled ? 'active' : ''}
+          onClick={() => setForm({ ...form, memory_enabled: true })}>开启</button>
+        <button className={!form.memory_enabled ? 'active' : ''}
+          onClick={() => setForm({ ...form, memory_enabled: false })}>关闭</button>
+      </div>
+        <p className="hint">默认关闭。关闭时工作台<strong>根本不会调用</strong>记忆提供者，而不是调用了再丢掉结果——所以"关着"对任何实现都是可验证的。</p>
+        <div className="status-line"><span className={`dot ${memory?.enabled ? 'green' : 'amber'}`} />{memoryText}</div></section>
       <section className="card"><h3>检索模型</h3><div className="status-line"><span className={`dot ${modelState.status === 'ready' ? 'green' : 'amber'}`} />
         {modelState.status === 'ready' ? 'multilingual-e5-small 已准备' : modelState.detail || '尚未下载'}</div>
         <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。混合检索依赖它；只开关键词检索的话不准备也不影响搜索。</p>

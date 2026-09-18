@@ -9,6 +9,8 @@ export type ProductSettings = {
   retrieval_mode: 'bm25' | 'hybrid'
   deepseek_model: string
   theme: 'system' | 'light' | 'dark'
+  /** 记忆接缝的开关。默认关；关着时后端**根本不会调用**记忆提供者。 */
+  memory_enabled: boolean
 }
 
 export type VectorIndexState = {
@@ -30,10 +32,19 @@ export type SetupState = {
 }
 
 export type MediaType = 'markdown' | 'pdf' | 'notebook'
+/**
+ * 一条依据来自哪一层。`note` 是检索到的笔记片段，也是唯一出厂就存在的层；
+ * `memory` 与 `web` 分别由记忆提供者和联网补充追加，默认都关着。
+ */
+export type Origin = 'note' | 'memory' | 'web'
+/** 来源列表与证据里出现的媒体类型：三层来源共用一个字段，所以比文档媒体类型宽。 */
+export type SourceMediaType = MediaType | 'memory' | 'web'
 export type Locator =
   | { kind: 'markdown'; start_line: number; end_line: number }
   | { kind: 'pdf'; page: number }
   | { kind: 'notebook'; cell: number; cell_type: string; start_line: number; end_line: number }
+  /** 记忆条目没有行号可定位，只能回到它派生自哪次对话/哪份笔记。 */
+  | { kind: 'memory'; id: string; derived_from: string }
 
 export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
 /** 应用内文件夹选择器看到的一层目录。`parent` 为空说明已经是盘符/根，不能再往上。 */
@@ -48,7 +59,7 @@ export type FolderListing = {
 }
 export type DocumentItem = { id: string; library_id: string; relative_path: string; display_name: string; media_type: MediaType; status: string; error: string | null; current_version_id: string | null; updated_at: string; library_name: string }
 export type ImportJob = { id: string; job_type: string; status: string; total: number; completed: number; failed: number; message: string | null }
-export type SearchHit = { chunk_id: string; document_id: string; version_id: string; title: string; media_type: MediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[]; channels?: Record<string, number>; channel_scores?: Record<string, number>; quality_reason?: string | null }
+export type SearchHit = { origin?: Origin; chunk_id: string; document_id: string; version_id: string; title: string; media_type: SourceMediaType; heading_path: string; locator: Locator; preview: string; score: number; matched_tokens: string[]; channels?: Record<string, number>; channel_scores?: Record<string, number>; quality_reason?: string | null }
 export type SearchResult = { query: string; index_version: string | null; retrieval_mode: 'bm25' | 'hybrid'; effective_mode: 'bm25' | 'hybrid'; results: SearchHit[] }
 export type SourceContent = { document_id: string; version_id: string; title: string; media_type: MediaType; text: string }
 /**
@@ -69,6 +80,17 @@ export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final'
 
 export type BundledResource = { name: string; size: number; modified_at: string }
 export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResource[] }
+/**
+ * 记忆接缝的运行状态。`items` 单独可为 null：条目数要问提供者才拿得到，
+ * 第三方实现抛异常时后端只把类型名放进 `error`，不让整个诊断接口失败。
+ */
+export type MemoryDiagnostics = {
+  available: boolean
+  provider?: string
+  items?: number | null
+  error?: string
+  enabled: boolean
+}
 export type Diagnostics = {
   product_version: string
   python: string
@@ -76,6 +98,7 @@ export type Diagnostics = {
   database_schema: number
   data_directories: { root_exists: boolean; database_exists: boolean; model_cache_exists: boolean }
   credentials: { deepseek_configured: boolean }
+  memory: MemoryDiagnostics
   runtime: { status: string; detail: string | null }
   retrieval_model: RetrievalModelState
 }

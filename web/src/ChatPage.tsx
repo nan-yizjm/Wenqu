@@ -1,10 +1,43 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type StreamEvent } from './api'
+import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type Origin, type StreamEvent } from './api'
 import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
 import { HitMeta } from './components/HitMeta'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
 import { FEEDBACK_KINDS } from './lib/feedback'
+
+/** 来源分层在界面上的顺序：笔记在前，记忆、网络依次随后。 */
+const LAYER_ORDER: { origin: Origin; label: string }[] = [
+  { origin: 'note', label: '笔记' },
+  { origin: 'memory', label: '记忆' },
+  { origin: 'web', label: '网络' },
+]
+
+/**
+ * 把一轮回答的来源按层摊平成一组卡片。
+ *
+ * 层名只在**出现第二种层**时才显示：出厂状态下只有笔记层，界面与从前逐像素
+ * 一致；只有真的混进了记忆或网络依据，才需要提醒"这条不是来自你的笔记"。
+ *
+ * 选中判定用 `chunk_id` 而不是 `label`：`label` 是 S1/S2 这种**每轮回答各自
+ * 从 1 开始的编号**，不同回答之间必然重号，用它比较会让另一轮的卡片跟着亮。
+ */
+function sourceChips(sources: MessageSource[], selected: MessageSource | null,
+                     open: (source: MessageSource) => void) {
+  const groups = LAYER_ORDER.map(layer => ({
+    ...layer, items: sources.filter(source => (source.origin || 'note') === layer.origin),
+  })).filter(group => group.items.length)
+  return groups.flatMap(group => [
+    ...(groups.length > 1
+      ? [<span className="source-layer" key={`layer-${group.origin}`}>{group.label}</span>]
+      : []),
+    ...group.items.map(source => <button key={source.chunk_id} title={source.preview}
+      className={selected?.chunk_id === source.chunk_id ? 'selected' : ''}
+      aria-pressed={selected?.chunk_id === source.chunk_id}
+      onClick={() => open(source)}>
+      <b>{source.label}</b>{source.title}<HitMeta hit={source} /></button>),
+  ])
+}
 
 function FeedbackPanel({ saved, onSave }: {
   saved?: { kind: FeedbackKind; note: string }
@@ -169,12 +202,8 @@ export function ChatPage() {
           {item.role === 'user' ? <div className="question-text">{item.content}</div>
             : item.status === 'streaming' ? <div className="answer-text">{item.content}</div>
             : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}
-          {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">{item.sources.map(source =>
-            <button key={source.label} title={source.preview}
-              className={selected?.label === source.label ? 'selected' : ''}
-              aria-pressed={selected?.label === source.label}
-              onClick={() => setSelected(source)}>
-              <b>{source.label}</b>{source.title}<HitMeta hit={source} /></button>)}</div>}
+          {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">
+            {sourceChips(item.sources, selected, setSelected)}</div>}
           {item.role === 'assistant' && item.status === 'complete' && item.error_code !== 'guard_rejected' && <div className="answer-actions">
             {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}
             <FeedbackPanel saved={savedFeedback[item.id]} onSave={(kind, note) => feedback(item, kind, note)} />
