@@ -466,6 +466,73 @@ const clickByText = (text, scope) => `(() => {
           `${listed} -> ${remaining}`);
   }
 
+  // ---- 12. 退出入口：正常使用下必须存在，且不许把"关标签"当成退出 ----
+  // 这一段默认**不真的退出**：退出会把正在被验收的这个实例关掉，跑完就没得看了。
+  // 要真走一遍，设 UI_ACCEPT_EXIT=1——那一次运行的收尾就是"应用确实停了"。
+  // （放在自造产出被删掉之后：先退出了，那个 DELETE 就发不出去了。）
+  const exitEntry = await s.eval(`(() => {
+    const button = document.querySelector('[data-testid="exit-open"]');
+    if (!button) return { 存在: false };
+    const scope = button.closest('.exit-control');
+    return { 存在: true,
+      文字: button.textContent.trim(),
+      在侧栏: !!button.closest('.shell aside'),
+      说明: (scope.querySelector('.exit-note') || {}).textContent || '' };
+  })()`);
+  // 必须是**常驻**的：设置页那个只在"保存后需要重启"时才出现，正常使用下等于没有。
+  check('正常使用下侧栏就有退出入口',
+        exitEntry.存在 === true && exitEntry.在侧栏 === true, JSON.stringify(exitEntry));
+  check('退出入口旁边写明关掉标签不算退出',
+        /关掉浏览器标签不会停止本地服务/.test(exitEntry.说明 || ''), exitEntry.说明);
+
+  await s.eval(`document.querySelector('[data-testid="exit-open"]').click()`);
+  await sleep(400);
+  const confirmBox = await s.eval(`(() => {
+    const box = document.querySelector('[data-testid="exit-confirm"]');
+    if (!box) return { 出现: false };
+    return { 出现: true,
+      文字: (box.querySelector('[data-testid="exit-question"]') || {}).textContent || '',
+      有确认: !!box.querySelector('[data-testid="exit-confirm-button"]'),
+      有取消: !!box.querySelector('[data-testid="exit-cancel-button"]') };
+  })()`);
+  // 退出是不可逆的日常动作，第一次点击不该直接把它执行掉。
+  check('第一下只展开确认，不直接退出',
+        confirmBox.出现 === true && confirmBox.有确认 && confirmBox.有取消, JSON.stringify(confirmBox));
+  check('确认里说明退出不删资料',
+        /资料、索引和会话都留在原处/.test(confirmBox.文字 || ''), JSON.stringify(confirmBox));
+  await s.shot('accept-exit-1440.png', 1440, 900);
+
+  await s.eval(`document.querySelector('[data-testid="exit-cancel-button"]').click()`);
+  await sleep(400);
+  const afterCancel = await s.eval(`({
+    入口还在: !!document.querySelector('[data-testid="exit-open"]'),
+    确认已收起: !document.querySelector('[data-testid="exit-confirm"]'),
+  })`);
+  // 取消必须真的什么都没发生——从浏览器外面问一次服务，别只信页面上的 DOM。
+  const healthAfterCancel = await fetch(`${APP}api/v1/health`)
+    .then(response => response.status).catch(() => 0);
+  check('取消之后应用照旧运行', afterCancel.入口还在 === true && afterCancel.确认已收起 === true
+        && healthAfterCancel === 200, JSON.stringify({ ...afterCancel, healthAfterCancel }));
+
+  if (process.env.UI_ACCEPT_EXIT === '1') {
+    await s.eval(`document.querySelector('[data-testid="exit-open"]').click()`);
+    await sleep(300);
+    await s.eval(`document.querySelector('[data-testid="exit-confirm-button"]').click()`);
+    await sleep(1500);
+    check('确认退出后进到收尾页', await s.eval(`!!document.querySelector('[data-testid="signed-off"]')`) === true, '');
+    // 真正的判据在浏览器外面：端口不再应答，才算"服务停了"。
+    let stopped = false;
+    for (let i = 0; i < 30; i++) {
+      const alive = await fetch(`${APP}api/v1/health`).then(() => true).catch(() => false);
+      if (!alive) { stopped = true; break; }
+      await sleep(500);
+    }
+    check('退出之后本地服务真的停了（端口不再应答）', stopped === true, `${APP}api/v1/health`);
+    await s.shot('accept-exit-signed-off.png', 1440, 900);
+  } else {
+    console.log('      未真的退出（设 UI_ACCEPT_EXIT=1 可走一遍；那会把应用关掉）');
+  }
+
   const errors = s.consoleErrors;
   check('页面无未捕获异常', errors.length === 0, errors.slice(0, 3).join(' | '));
 
