@@ -228,3 +228,15 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
 .web-disclosure p:first-child{margin-top:0}
 .web-disclosure strong{color:var(--warn-text)}
 .disclosure-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}
+
+/* 信息图导出：预览图按卡片宽度缩放，降级提示用 warn 色而不是 danger——
+   浏览器不可用是可自救的降级，不是故障。 */
+.studio-infographic .hint{line-height:1.75}
+.studio-infographic-image{display:block;width:100%;height:auto;margin:16px 0 0;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.studio-infographic .status-row:first-of-type{margin-top:16px}
+.studio-download{border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:8px 12px;color:var(--text-soft);font-size:13px;text-decoration:none}
+.studio-download:hover{border-color:var(--accent-border);background:var(--accent-weak);color:var(--accent-text)}
+.studio-infographic-degraded{margin-top:16px;padding:14px 16px;border:1px solid var(--warn-border);background:var(--warn-weak);border-radius:12px}
+.studio-infographic-degraded p{margin:8px 0 0;line-height:1.7}.studio-infographic-degraded p:first-child{margin-top:0}
+.studio-degraded-line{color:var(--warn-text);font-weight:600}
+.studio-infographic-degraded .hint{color:var(--text-soft)}

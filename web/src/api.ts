@@ -155,6 +155,45 @@ export type Artifact = ArtifactSummary & {
   backlink?: BacklinkReport
   mindmap?: Mindmap | null
 }
+/**
+ * 信息图的渲染记录（P4）。
+ *
+ * `status` 只有两种：
+ * - `complete`：本机浏览器渲染成功，`pixels` / `milliseconds` 都是实测值；
+ * - `unavailable`：本机没有可用浏览器。**这不是失败**——同一目录下那份 HTML 照样
+ *   导出了，用户可以用自己的浏览器打开它。界面按"降级"显示，不按"出错"显示。
+ */
+export type InfographicRender = {
+  status: 'complete' | 'unavailable'
+  reason: string | null
+  message: string | null
+  browser: string | null
+  browser_path: string | null
+  milliseconds: number | null
+  bytes: number | null
+  pixels: { width: number; height: number } | null
+  /** 浏览器有没有按请求的尺寸出图。`false` 说明图能看但尺寸不对，得让用户看见。 */
+  pixels_match: boolean | null
+  created_at: string
+}
+/**
+ * 信息图导出记录。**它不是一种产出类型**，而是把一份产出的来源画成 PNG：
+ * 不调模型、不需要新表，只把已经存在的来源分布、章节结构、命中率摊到一张图上。
+ * 所以图里没有一个字来自模型——每个编号都指向一份资料片段。
+ */
+export type InfographicExport = {
+  artifact_id: string
+  title: string
+  kind: ArtifactKind
+  kind_label: string
+  layout: { width: number; height: number; scale: number; pixels: { width: number; height: number } }
+  stats: { chunks: number; documents: number; sections: number; origin_text: string }
+  /** 只有指南有：图里印的就是这个真分数。导图不给（它的覆盖率是构造结果）。 */
+  backlink: BacklinkReport | null
+  files: { png: string; html: string; record: string; png_path: string; html_path: string }
+  render: InfographicRender
+  degraded: boolean
+}
 export type ArtifactStreamEvent = {
   type: 'retrieval' | 'token' | 'final' | 'stopped' | 'error'
   artifact_id: string
@@ -352,6 +391,19 @@ export const api = {
     }
     await readNdjson<ArtifactStreamEvent>(response, onEvent)
   },
+  /**
+   * 信息图的三条路径集中放在这里：界面只该知道"有这么一个接口"，不该自己拼 URL。
+   * `stamp` 传上一次的渲染时间——重新导出后不加它，浏览器会把旧图继续拿来显示。
+   */
+  infographicImage: (id: string, stamp?: string) =>
+    `/api/v1/artifacts/${id}/infographic.png${stamp ? `?v=${encodeURIComponent(stamp)}` : ''}`,
+  infographicDownload: (id: string) => `/api/v1/artifacts/${id}/infographic.png?download=1`,
+  /** 导出（渲染）信息图。浏览器不可用时也返回 200，看 `degraded` / `render.status`。 */
+  exportInfographic: (id: string) => request<InfographicExport>(
+    `/api/v1/artifacts/${id}/infographic`, { method: 'POST' }),
+  /** 读回上一次的导出记录；从没导出过就是 `export: null`（不是错误）。 */
+  infographicExport: (id: string) => request<{ artifact_id: string; export: InfographicExport | null }>(
+    `/api/v1/artifacts/${id}/infographic`),
   stopMessage: (conversationId: string, messageId: string) => request<{ stopping: boolean }>(
     `/api/v1/conversations/${conversationId}/messages/${messageId}/stop`, { method: 'POST' }),
   favorites: (filters: FavoriteFilters = {}) => {

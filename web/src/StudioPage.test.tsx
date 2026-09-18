@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Artifact, ArtifactStreamEvent, ArtifactSummary, Mindmap } from './api'
+import type {
+  Artifact, ArtifactStreamEvent, ArtifactSummary, InfographicExport, Mindmap,
+} from './api'
 import { StudioPage } from './StudioPage'
 
 type Event = ArtifactStreamEvent
@@ -37,6 +39,41 @@ const source = {
   preview: '分页管理 KV Cache。', score: 1,
 }
 
+/**
+ * 信息图导出记录。`degraded()` 模拟"本机没装 / 找不到浏览器"——那种情况**不是失败**：
+ * HTML 已经导出了，用户还能自己打开它。
+ */
+const exported = (over: Partial<InfographicExport> = {}): InfographicExport => ({
+  artifact_id: 'art_1', title: 'KV Cache', kind: 'guide', kind_label: '学习指南',
+  layout: { width: 1080, height: 948, scale: 2, pixels: { width: 2160, height: 1896 } },
+  stats: { chunks: 3, documents: 2, sections: 2, origin_text: '笔记 3' },
+  backlink: report(),
+  files: {
+    png: 'KV Cache-01234567.png', html: 'KV Cache-01234567.html',
+    record: 'KV Cache-01234567.render.json',
+    png_path: 'C:\\数据\\exports\\KV Cache-01234567.png',
+    html_path: 'C:\\数据\\exports\\KV Cache-01234567.html',
+  },
+  render: {
+    status: 'complete', reason: null, message: null, browser: 'Microsoft Edge',
+    browser_path: 'C:\\Edge\\msedge.exe', milliseconds: 812, bytes: 243387,
+    pixels: { width: 2160, height: 1896 }, pixels_match: true,
+    created_at: '2026-09-18T10:02:00+00:00',
+  },
+  degraded: false,
+  ...over,
+})
+
+const degraded = (): InfographicExport => exported({
+  degraded: true,
+  render: {
+    status: 'unavailable', reason: 'browser_unavailable',
+    message: '没有找到可用的浏览器（Edge 或 Chrome）。可以先设置环境变量',
+    browser: null, browser_path: null, milliseconds: null, bytes: null,
+    pixels: null, pixels_match: null, created_at: '2026-09-18T10:02:00+00:00',
+  },
+})
+
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   detail: vi.fn(),
@@ -44,6 +81,8 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   stream: vi.fn(),
   source: vi.fn(),
+  exportInfographic: vi.fn(),
+  infographicExport: vi.fn(),
 }))
 
 vi.mock('./api', () => ({
@@ -55,6 +94,11 @@ vi.mock('./api', () => ({
     streamArtifact: (topic: string, kind: string, onEvent: unknown, signal: unknown) =>
       mocks.stream(topic, kind, onEvent, signal),
     source: () => mocks.source(),
+    exportInfographic: (id: string) => mocks.exportInfographic(id),
+    infographicExport: (id: string) => mocks.infographicExport(id),
+    infographicImage: (id: string, stamp?: string) =>
+      `/api/v1/artifacts/${id}/infographic.png${stamp ? `?v=${stamp}` : ''}`,
+    infographicDownload: (id: string) => `/api/v1/artifacts/${id}/infographic.png?download=1`,
   },
 }))
 
@@ -72,6 +116,8 @@ beforeEach(() => {
   mocks.stream.mockResolvedValue(undefined)
   mocks.source.mockResolvedValue({ document_id: 'doc_a', version_id: 'ver_a', title: '推理.md',
     media_type: 'markdown', text: '分页管理 KV Cache。' })
+  mocks.infographicExport.mockResolvedValue({ artifact_id: 'art_1', export: null })
+  mocks.exportInfographic.mockResolvedValue(exported())
 })
 
 /** 走一次"填主题 → 生成"，把事件按顺序喂给页面。 */
@@ -257,5 +303,110 @@ describe('StudioPage lifecycle', () => {
 
     await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith('art_1'))
     confirm.mockRestore()
+  })
+})
+
+describe('StudioPage infographic export', () => {
+  /** 打开左侧历史里的第一份产出。 */
+  async function openFirst(name = /KV Cache/) {
+    render(<StudioPage />)
+    fireEvent.click(await screen.findByRole('button', { name }))
+    return screen.findByTestId('infographic-card')
+  }
+
+  it('offers the export before anything has been rendered', async () => {
+    await openFirst()
+
+    expect(screen.queryByTestId('infographic-image')).not.toBeInTheDocument()
+    expect(screen.getByTestId('infographic-export')).toHaveTextContent('导出信息图')
+  })
+
+  it('shows the image, what it cost to render, and a download link', async () => {
+    await openFirst()
+
+    fireEvent.click(screen.getByTestId('infographic-export'))
+
+    await waitFor(() => expect(mocks.exportInfographic).toHaveBeenCalledWith('art_1'))
+    const image = await screen.findByTestId('infographic-image')
+    // 带一串渲染时间当缓存键：重新导出后不能再显示上一次那张图。
+    expect(image).toHaveAttribute(
+      'src', '/api/v1/artifacts/art_1/infographic.png?v=2026-09-18T10:02:00+00:00')
+    expect(screen.getByTestId('infographic-milliseconds')).toHaveTextContent('812 毫秒')
+    expect(screen.getByText('2160×1896 像素')).toBeInTheDocument()
+    expect(screen.getByText('Microsoft Edge')).toBeInTheDocument()
+    expect(screen.getByTestId('infographic-download')).toHaveAttribute(
+      'href', '/api/v1/artifacts/art_1/infographic.png?download=1')
+  })
+
+  it('keeps the exported HTML as a way out when no browser is available', async () => {
+    // 降级要能自救：说清为什么、并且给出 HTML 这条退路，且**不显示一张不存在的图**。
+    mocks.exportInfographic.mockResolvedValue(degraded())
+    await openFirst()
+
+    fireEvent.click(screen.getByTestId('infographic-export'))
+
+    const block = await screen.findByTestId('infographic-degraded')
+    expect(block).toHaveTextContent('没有找到可用的浏览器')
+    expect(block).toHaveTextContent('OBSIDIAN_RAG_BROWSER')
+    expect(block).toHaveTextContent('KV Cache-01234567.html')
+    expect(screen.queryByTestId('infographic-image')).not.toBeInTheDocument()
+    // 它不该被当成故障显示（红色错误块）：用户手里有 HTML，这不是坏掉。
+    expect(block.querySelector('.error')).toBeNull()
+  })
+
+  it('reports a browser that ignored the requested size', async () => {
+    mocks.exportInfographic.mockResolvedValue(exported({
+      render: {
+        ...exported().render, pixels: { width: 800, height: 600 }, pixels_match: false,
+      },
+    }))
+    await openFirst()
+
+    fireEvent.click(screen.getByTestId('infographic-export'))
+
+    expect(await screen.findByText(/浏览器没有按请求的尺寸出图/)).toBeInTheDocument()
+  })
+
+  it('shows the record already on disk when you open a past artifact', async () => {
+    mocks.infographicExport.mockResolvedValue({ artifact_id: 'art_1', export: exported() })
+
+    await openFirst()
+
+    expect(await screen.findByTestId('infographic-image')).toBeInTheDocument()
+    expect(screen.getByTestId('infographic-export')).toHaveTextContent('重新导出')
+  })
+
+  it('does not carry the previous image over to the next artifact', async () => {
+    // 这个页面踩过的坑正是"上一次的状态跟了过来"（见 clearLive 的注释）。这里固定的是
+    // **行为**：换一份产出就不能再看到上一份的图。它由两处共同保证——卡片在换 `key`
+    // 时重挂、以及 `artifactId` 变化时清空本地记录；任一处单独去掉，这条仍会通过。
+    listed = [{ ...summary },
+      { ...summary, id: 'art_2', title: '缓存策略', kind: 'mindmap', content_length: 40 }]
+    mocks.infographicExport.mockImplementation(async (id: string) =>
+      ({ artifact_id: id, export: id === 'art_1' ? exported() : null }))
+    mocks.detail.mockImplementation(async (id: string) => ({
+      ...summary, id, title: id === 'art_1' ? 'KV Cache' : '缓存策略',
+      kind: id === 'art_1' ? 'guide' : 'mindmap', content: '', sources: [source],
+    } satisfies Artifact))
+    render(<StudioPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /KV Cache/ }))
+    expect(await screen.findByTestId('infographic-image')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /缓存策略/ }))
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('infographic-image')).not.toBeInTheDocument())
+    expect(screen.getByTestId('infographic-export')).toHaveTextContent('导出信息图')
+  })
+
+  it('reports a failed export instead of silently doing nothing', async () => {
+    mocks.exportInfographic.mockRejectedValue(new Error('无法连接到工作台。'))
+    await openFirst()
+
+    fireEvent.click(screen.getByTestId('infographic-export'))
+
+    expect(await screen.findByText('无法连接到工作台。')).toBeInTheDocument()
+    expect(screen.getByTestId('infographic-export')).not.toBeDisabled()
   })
 })

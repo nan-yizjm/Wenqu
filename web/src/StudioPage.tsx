@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   api, type Artifact, type ArtifactKind, type ArtifactStatus, type ArtifactSummary,
-  type BacklinkReport, type MessageSource, type Mindmap, type MindmapNode,
+  type BacklinkReport, type InfographicExport, type MessageSource, type Mindmap,
+  type MindmapNode,
 } from './api'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
 import { SourcePanel } from './SourcePanel'
@@ -106,6 +107,95 @@ function MindmapView({ mindmap, sources, open }: {
       <pre><code>{mindmap.mermaid}</code></pre>
       <p className="hint">本工作台不渲染 Mermaid，只提供可复制的文本。</p>
     </details>
+  </section>
+}
+
+/**
+ * 信息图导出卡。
+ *
+ * 这一格要解释清楚"图片产出在这个产品里是什么"：它**不是第三种产出类型**，而是把
+ * 眼前这份产出的来源画成一张 PNG——所以它不调模型、不需要新表。图里没有一个字是
+ * 模型写的，每个编号都指向一份资料片段。
+ *
+ * 浏览器不可用（`degraded`）时**不显示成"出错"**：那份 HTML 已经导出了，用户可以用
+ * 自己的浏览器打开它、或者自己打印成图片。一个能自救的功能不该被显示成故障。
+ */
+function InfographicCard({ artifactId }: { artifactId: string }) {
+  const [record, setRecord] = useState<InfographicExport | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  // 换一份产出就重新读一次导出记录。父组件用 `key` 强制重挂，所以这里不会留下上一份
+  // 产出的图——"上一次的状态跟了过来"正是这个页面踩过的坑（见 clearLive 的注释）。
+  useEffect(() => {
+    let alive = true
+    setRecord(null); setError('')
+    void (async () => {
+      try {
+        const found = await api.infographicExport(artifactId)
+        if (alive) setRecord(found.export)
+      } catch { /* 读不到就当作没导出过；真要导出时会再报一次错 */ }
+    })()
+    return () => { alive = false }
+  }, [artifactId])
+
+  const run = async () => {
+    setBusy(true); setError('')
+    try { setRecord(await api.exportInfographic(artifactId)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '导出失败') }
+    finally { setBusy(false) }
+  }
+
+  const render = record?.render
+  return <section className="card studio-infographic" data-testid="infographic-card">
+    <h3>信息图（PNG）</h3>
+    <p className="hint">
+      把这份产出的来源画成一张图：来源分布、章节结构、回链命中率。图里没有一个字来自
+      模型——每个编号都指向一份资料片段。渲染由本机 Edge / Chrome 无头完成，不联网。
+    </p>
+    <div className="studio-actions">
+      <button className="primary" disabled={busy} onClick={() => void run()}
+        data-testid="infographic-export">
+        {busy ? '正在渲染…' : record ? '重新导出' : '导出信息图'}
+      </button>
+      {error && <span className="error">{error}</span>}
+    </div>
+
+    {record && render?.status === 'complete' && <>
+      <img className="studio-infographic-image" data-testid="infographic-image"
+        src={api.infographicImage(artifactId, render.created_at)}
+        alt={`${record.title} 的来源信息图`} />
+      <div className="status-row"><span>渲染耗时</span>
+        <code data-testid="infographic-milliseconds">{render.milliseconds ?? '—'} 毫秒</code></div>
+      <div className="status-row"><span>图片尺寸</span>
+        <code>{render.pixels ? `${render.pixels.width}×${render.pixels.height}` : '—'} 像素</code></div>
+      <div className="status-row"><span>渲染器</span><code>{render.browser ?? '—'}</code></div>
+      <div className="status-row"><span>文件</span>
+        <code title={record.files.png_path}>{record.files.png}</code></div>
+      <div className="studio-actions">
+        <a className="studio-download" data-testid="infographic-download"
+          href={api.infographicDownload(artifactId)}>下载 PNG</a>
+        <span className="hint">已导出到 {record.files.png_path}</span>
+      </div>
+      {render.pixels_match === false && <p className="error">
+        浏览器没有按请求的尺寸出图：版面 {record.layout.width}×{record.layout.height}
+        （{record.layout.scale} 倍 → 应为 {record.layout.pixels.width}×
+        {record.layout.pixels.height} 像素）。图能看，但排版可能与预期不同。
+      </p>}
+    </>}
+
+    {record && render?.status === 'unavailable' &&
+      <div className="studio-infographic-degraded" data-testid="infographic-degraded">
+        {/* 用 warn 色而不是 danger：这不是功能故障，用户手里有 HTML 这条退路。
+            只要把"为什么"和"怎么办"都说清楚，它就不该看起来像报错。 */}
+        <p className="studio-degraded-line">没能渲染成图片：{render.message}</p>
+        <p className="hint">
+          这份产出的 HTML 已经导出，可以用浏览器打开它、或自己打印成图片。也可以把环境变量
+          OBSIDIAN_RAG_BROWSER 指向 Edge / Chrome 的可执行文件后重试。
+        </p>
+        <div className="status-row"><span>HTML 文件</span>
+          <code title={record.files.html_path}>{record.files.html_path}</code></div>
+      </div>}
   </section>
 }
 
@@ -259,6 +349,10 @@ export function StudioPage() {
                 : <p className="hint">正在等待模型输出…</p>}
             </section>}
         {liveReport && <BacklinkCard report={liveReport} />}
+        {/* 刚生成完就能导出：产出在流里 `final` 之前已经落库为完整状态，
+            不必先去左边列表点一次。`key` 保证换一份产出就重挂。 */}
+        {liveId && liveStatus === 'complete' &&
+          <InfographicCard key={liveId} artifactId={liveId} />}
       </section>}
 
       {!showingLive && detail && <section className="studio-output">
@@ -284,6 +378,7 @@ export function StudioPage() {
           <div className="source-chips">{detail.sources.map(item => <button key={item.label}
             onClick={() => setSource(item)}><b>{item.label}</b>{item.title} · {item.heading_path}</button>)}</div>
         </section>
+        <InfographicCard key={detail.id} artifactId={detail.id} />
       </section>}
 
       {!showingLive && !detail && <p className="table-empty">
