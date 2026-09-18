@@ -289,7 +289,7 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             # 产出与问答共用同一个 `chat_client_factory`：用哪个模型只在一处决定，
             # 否则会出现"问答走 Ollama、产出偷偷走 DeepSeek"这种要翻配置才发现的事。
             app.state.studio = StudioService(
-                app.state.database, app.state.materials,
+                app.state.database, paths, app.state.materials,
                 lambda: current_settings(app.state.database), credentials, chat_client_factory)
             app.state.support = SupportService(
                 app.state.database, paths, lambda: current_settings(app.state.database),
@@ -765,6 +765,45 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     async def stop_artifact(artifact_id: str, request: Request):
         try:
             return request.app.state.studio.stop(artifact_id)
+        except KeyError as error:
+            return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.get("/api/v1/artifacts/{artifact_id}/infographic")
+    async def infographic_export(artifact_id: str, request: Request):
+        """上一次导出记录；从没导出过是 `export: null`，不是 404。"""
+        try:
+            return request.app.state.studio.infographic_export(artifact_id)
+        except KeyError as error:
+            return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
+                                status_code=404)
+
+    @app.get("/api/v1/artifacts/{artifact_id}/infographic.png")
+    async def infographic_image(artifact_id: str, request: Request, download: int = 0):
+        """已渲染的 PNG。默认**内联**返回（界面要拿它当 `<img>` 显示），`?download=1`
+        才带 Content-Disposition——同一个文件的两个用法，不该靠两个接口表达。"""
+        try:
+            path = request.app.state.studio.infographic_file(artifact_id)
+        except KeyError as error:
+            return JSONResponse({"error": "infographic_missing", "message": str(error.args[0])},
+                                status_code=404)
+        if download:
+            return FileResponse(path, media_type="image/png", filename=path.name)
+        return FileResponse(path, media_type="image/png")
+
+    @app.post("/api/v1/artifacts/{artifact_id}/infographic")
+    async def export_infographic(artifact_id: str, request: Request):
+        """把一份产出的来源画成 PNG（本机浏览器无头渲染）。
+
+        **必须放线程池**：这里要起一个浏览器进程并等它出图（实测 0.8–2.3 秒），直接在
+        事件循环里跑会把整个界面卡住。
+
+        浏览器不可用**不是错误**：照样 200，带 `degraded: true` 与已导出的 HTML 路径
+        ——图没出来，但用户还能自己打开那份 HTML。口径与 P2 的断网降级一致。
+        """
+        try:
+            return await asyncio.to_thread(
+                request.app.state.studio.export_infographic, artifact_id)
         except KeyError as error:
             return JSONResponse({"error": "artifact_not_found", "message": str(error.args[0])},
                                 status_code=404)

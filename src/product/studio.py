@@ -23,17 +23,27 @@
 - **产出复用流式通道**，不另起 job 表：产品已经有"流式 + 可停止 + 落库"这一套，
   而 `import_jobs` 是资料导入专用的（界面上的"处理中"横幅读它，混进去会出现
   "正在导入 1 份资料"却是在写指南）。
+
+**信息图（P4）是导出器，不是第三种产出类型。** 它把一份产出的来源画成 PNG：不调
+模型、不需要新表（要展示的东西全在 `artifact_sources` 里）、不在生成流程里，所以它
+没有 `kind`，只在用户点导出时渲染一次。为什么不做成第三种 `kind`（那要重建
+`artifacts` 表并动 `CHECK` 约束）、以及为什么图里一个字都不是模型写的，都写在
+`infographic.py` 的模块 docstring 里。
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 import threading
 import uuid
 
 from .chat import SOURCE_PATTERN, default_chat_client, safe_error, source_record
 from .database import utc_now
+from .headless import RenderFailed, RendererUnavailable, screenshot
+from .infographic import build_model, render_html
+from .organize import safe_filename
 
 
 ARTIFACT_KINDS = ("guide", "mindmap")
@@ -62,6 +72,19 @@ MINDMAP_COVERAGE_NOTE = (
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _write_text(path, text: str):
+    """原子落盘：先写 `.tmp` 再改名，与导出 Markdown 同一套写法。
+
+    这里是**必须**的而不是讲究：信息图的 HTML 要被浏览器整个读进去渲染，读到半张
+    会得到一张空白图——而空白图和"内容为空"在结果上分不出来。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(text, encoding="utf-8", newline="\n")
+    temporary.replace(path)
+    return path
 
 
 def _evidence(results) -> str:
@@ -209,8 +232,11 @@ class StudioService:
     于是引用编号、来源面板、分层显示全都不用为产出再写一遍。
     """
 
-    def __init__(self, database, materials, settings_getter, credentials, client_factory=None):
-        self.database, self.materials = database, materials
+    def __init__(self, database, paths, materials, settings_getter, credentials,
+                 client_factory=None):
+        # `paths` 排第二位，与 `OrganizeService`/`SupportService` 一致：导出要落
+        # `paths.exports`，这个依赖不该藏在末尾。
+        self.database, self.paths, self.materials = database, paths, materials
         self.settings_getter, self.credentials = settings_getter, credentials
         self.client_factory = client_factory or (
             lambda settings: default_chat_client(settings, self.credentials))
@@ -290,7 +316,8 @@ class StudioService:
         return record
 
     def delete_artifact(self, artifact_id: str) -> dict:
-        if not self.database.fetchone("SELECT id FROM artifacts WHERE id=?", (artifact_id,)):
+        row = self.database.fetchone("SELECT title FROM artifacts WHERE id=?", (artifact_id,))
+        if not row:
             raise KeyError("产出不存在。")
         with self._active_lock:
             active = artifact_id in self._active
@@ -299,6 +326,10 @@ class StudioService:
         # artifact_sources 是 ON DELETE CASCADE，删主表就够（连接上开了外键）。
         with self.database.transaction() as connection:
             connection.execute("DELETE FROM artifacts WHERE id=?", (artifact_id,))
+        # 导出物跟着走：产出没了却在 exports 里留一张图，用户点开只会觉得是幽灵文件。
+        # 删文件是尽力而为——`exports/` 本来就还没有清理策略，这里失败不该影响删除结果。
+        for path in self._infographic_paths(row["title"], artifact_id).values():
+            path.unlink(missing_ok=True)
         return {"deleted": True}
 
     def stop(self, artifact_id: str) -> dict:
@@ -314,6 +345,108 @@ class StudioService:
         if row["status"] == "running":
             self._finish(artifact_id, row["content"], "stopped", error_code="stream_not_active")
         return {"stopping": False}
+
+    # ---- 信息图导出（P4 图片产出） ---------------------------------------------
+
+    def _infographic_paths(self, title: str, artifact_id: str) -> dict:
+        """导出物的三个文件名。**纯函数**（标题 + id 后 8 位）——这样"取那张图"的
+        那次请求也能算出同一个名字，不必先去读记录文件。
+
+        标题在产出创建后不可改，所以这个 stem 是稳定的；哪天加了"改标题"的功能，
+        这里必须跟着改，否则会去删一个不存在的文件。
+        """
+        stem = f"{safe_filename(title, '产出')}-{artifact_id[-8:]}"
+        return {"png": self.paths.exports / f"{stem}.png",
+                "html": self.paths.exports / f"{stem}.html",
+                "record": self.paths.exports / f"{stem}.render.json"}
+
+    def infographic_model(self, artifact_id: str) -> dict:
+        """只算模型，不渲染、不起浏览器。给界面做"导出前先看看"用。"""
+        return build_model(self.get_artifact(artifact_id))
+
+    def _export_payload(self, record: dict, model: dict, paths: dict, render: dict) -> dict:
+        return {
+            "artifact_id": record["id"],
+            "title": record["title"],
+            "kind": record["kind"],
+            "kind_label": model["kind_label"],
+            "layout": {"width": model["width"], "height": model["height"],
+                       "scale": model["scale"],
+                       "pixels": {"width": model["width"] * model["scale"],
+                                  "height": model["height"] * model["scale"]}},
+            "stats": model["stats"],
+            "backlink": model["backlink"],
+            "files": {"png": paths["png"].name, "html": paths["html"].name,
+                      "record": paths["record"].name,
+                      "png_path": str(paths["png"]), "html_path": str(paths["html"])},
+            "render": render,
+            "degraded": render["status"] != "complete",
+        }
+
+    def export_infographic(self, artifact_id: str) -> dict:
+        """渲染 PNG 并落盘，返回渲染记录。
+
+        **降级不抛异常**：找不到浏览器时照样返回 200，带 `degraded: true` 与已导出的
+        HTML 路径——图没出来，但这事不算"失败"：用户还能自己打开那份 HTML。这与 P2
+        断网降级是同一个口径：如实标注，不静默失败，也不假装成功。
+        """
+        record = self.get_artifact(artifact_id)
+        model = build_model(record)
+        paths = self._infographic_paths(record["title"], artifact_id)
+        _write_text(paths["html"], render_html(model))
+        try:
+            rendered = screenshot(paths["html"], paths["png"], width=model["width"],
+                                  height=model["height"], scale=model["scale"])
+        except (RendererUnavailable, RenderFailed) as error:
+            render = {"status": "unavailable",
+                      "reason": ("browser_unavailable"
+                                 if isinstance(error, RendererUnavailable) else "render_failed"),
+                      "message": str(error), "browser": None, "browser_path": None,
+                      "milliseconds": None, "bytes": None, "pixels": None,
+                      "pixels_match": None, "created_at": utc_now()}
+        else:
+            pixels = {"width": rendered["width"], "height": rendered["height"]}
+            render = {"status": "complete", "reason": None, "message": None,
+                      "browser": rendered["browser"], "browser_path": rendered["browser_path"],
+                      "milliseconds": rendered["milliseconds"], "bytes": rendered["bytes"],
+                      "pixels": pixels,
+                      # 理论尺寸由 `--window-size × scale` 决定（见 headless.py 实测），
+                      # 实际尺寸由 PNG 头读出。两者不一致说明浏览器没按参数来，那是个
+                      # 该被看见的事实，不该被"反正有图了"盖过去。
+                      "pixels_match": pixels == {"width": model["width"] * model["scale"],
+                                                 "height": model["height"] * model["scale"]},
+                      "created_at": utc_now()}
+        payload = self._export_payload(record, model, paths, render)
+        # 渲染记录落盘：界面刷新之后还想知道"这张图什么时候出的、用哪个浏览器、花了
+        # 多久"，就不能只靠那一次 HTTP 响应。产出正文里的指标是现算的，而渲染是
+        # 发生在某一刻的事——它必须被记下来。
+        _write_text(paths["record"], json.dumps(payload, ensure_ascii=False, indent=2))
+        return payload
+
+    def infographic_export(self, artifact_id: str) -> dict:
+        """读回上一次导出记录；从没导出过就是 `None`（不是错误）。"""
+        path = self._infographic_paths(self._title_of(artifact_id), artifact_id)["record"]
+        if not path.is_file():
+            return {"artifact_id": artifact_id, "export": None}
+        try:
+            return {"artifact_id": artifact_id,
+                    "export": json.loads(path.read_text(encoding="utf-8"))}
+        except (OSError, json.JSONDecodeError):
+            # 记录文件坏了不该把界面卡住：当作"还没导出过"，比抛 500 有用。
+            return {"artifact_id": artifact_id, "export": None}
+
+    def infographic_file(self, artifact_id: str) -> Path:
+        """已渲染的 PNG 路径。没导出过就 `KeyError`，界面据此提示"先导出"。"""
+        path = self._infographic_paths(self._title_of(artifact_id), artifact_id)["png"]
+        if not path.is_file():
+            raise KeyError("这份产出还没有导出信息图。")
+        return path
+
+    def _title_of(self, artifact_id: str) -> str:
+        row = self.database.fetchone("SELECT title FROM artifacts WHERE id=?", (artifact_id,))
+        if not row:
+            raise KeyError("产出不存在。")
+        return row["title"]
 
     # ---- 生成 -----------------------------------------------------------------
 
