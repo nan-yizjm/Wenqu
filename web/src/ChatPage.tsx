@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type Origin, type StreamEvent } from './api'
+import { api, type ChatMessage, type Conversation, type FeedbackKind, type MessageSource, type Origin, type StreamEvent, type WebState } from './api'
 import { SourcePanel } from './SourcePanel'
 import { AnswerMarkdown } from './components/AnswerMarkdown'
 import { HitMeta } from './components/HitMeta'
@@ -39,6 +39,23 @@ function sourceChips(sources: MessageSource[], selected: MessageSource | null,
   ])
 }
 
+/**
+ * 联网没成的时候必须说出来。
+ *
+ * "问了但没搜到"（`empty`）刻意不提示：那是个真实结果，不是故障，每轮都提示等于
+ * 噪音；而 `failed` 与 `unconfigured` 都意味着**用户以为联网了，其实一个字节都
+ * 没出去**——不说就会被读成"今天没什么可网的"，那是产品在替自己瞒事。
+ */
+function WebNotice({ state }: { state: WebState }) {
+  if (state.status === 'failed') return <p className="web-notice">
+    本次未能联网（{state.detail || '未知错误'}），回答只依据你的笔记与记忆。
+  </p>
+  if (state.status === 'unconfigured') return <p className="web-notice">
+    联网已开启，但还没有配置搜索后端，本次没有发出任何网络请求。
+  </p>
+  return null
+}
+
 function FeedbackPanel({ saved, onSave }: {
   saved?: { kind: FeedbackKind; note: string }
   onSave: (kind: FeedbackKind, note: string) => Promise<void>
@@ -73,6 +90,9 @@ export function ChatPage() {
   const [message, setMessage] = useState('')
   const [selected, setSelected] = useState<MessageSource | null>(null)
   const [savedFeedback, setSavedFeedback] = useState<Record<string, { kind: FeedbackKind; note: string }>>({})
+  // 每轮问答的联网状态。存在组件里而不是消息里：消息答完会从服务端重取一遍，
+  // 而联网状态没有入库（见学习记录 35 的"还没解决什么"），放消息上会在重取后消失。
+  const [webStates, setWebStates] = useState<Record<string, WebState>>({})
   const [loaded, setLoaded] = useState(false)
   const controller = useRef<AbortController | null>(null)
   const streamingMessage = useRef<string | null>(null)
@@ -104,27 +124,34 @@ export function ChatPage() {
       provider: null, model: null, index_version: null, error_code: null, reply_to_message_id: null, sources: [] })
     setActive({ ...active, messages: optimistic }); setQuestion(''); setBusy(true); setMessage('')
     const abort = new AbortController(); controller.current = abort
-    const applyEvent = (event: StreamEvent) => setActive(current => {
-      streamingMessage.current = event.message_id
-      if (!current) return current
-      const messages = [...(current.messages || [])]
-      const index = messages.findIndex(item => item.id === tempId || item.id === event.message_id)
-      if (index < 0) return current
-      const existing = messages[index]
-      const next = { ...existing, id: event.message_id }
-      if (event.type === 'retrieval') next.sources = event.sources || []
-      if (event.type === 'generation') { next.provider = event.provider || null; next.model = event.model || null }
-      if (event.type === 'token') next.content += event.text || ''
-      if (event.type === 'final' || event.type === 'stopped' || event.type === 'error') {
-        next.content = event.content ?? next.content; next.status = event.status || (event.type === 'error' ? 'failed' : 'complete')
-        if (event.sources) next.sources = event.sources
-        if (event.rejected) next.error_code = 'guard_rejected'
-        if (event.type === 'error') setMessage(event.message || '生成失败')
-        if (event.citation_warning) setMessage('回答没有引用有效证据，请打开来源自行核对。')
+    const applyEvent = (event: StreamEvent) => {
+      // 放在 setActive 外面：在更新函数里调另一个 setState 会变成渲染期的副作用。
+      if (event.type === 'retrieval' && event.web) {
+        const state = event.web
+        setWebStates(current => ({ ...current, [event.message_id]: state }))
       }
-      messages[index] = next
-      return { ...current, messages }
-    })
+      setActive(current => {
+        streamingMessage.current = event.message_id
+        if (!current) return current
+        const messages = [...(current.messages || [])]
+        const index = messages.findIndex(item => item.id === tempId || item.id === event.message_id)
+        if (index < 0) return current
+        const existing = messages[index]
+        const next = { ...existing, id: event.message_id }
+        if (event.type === 'retrieval') next.sources = event.sources || []
+        if (event.type === 'generation') { next.provider = event.provider || null; next.model = event.model || null }
+        if (event.type === 'token') next.content += event.text || ''
+        if (event.type === 'final' || event.type === 'stopped' || event.type === 'error') {
+          next.content = event.content ?? next.content; next.status = event.status || (event.type === 'error' ? 'failed' : 'complete')
+          if (event.sources) next.sources = event.sources
+          if (event.rejected) next.error_code = 'guard_rejected'
+          if (event.type === 'error') setMessage(event.message || '生成失败')
+          if (event.citation_warning) setMessage('回答没有引用有效证据，请打开来源自行核对。')
+        }
+        messages[index] = next
+        return { ...current, messages }
+      })
+    }
     try {
       await api.streamMessage(active.id, body, applyEvent, abort.signal)
     } catch (error) {
@@ -204,6 +231,7 @@ export function ChatPage() {
             : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}
           {item.role === 'assistant' && item.sources.length > 0 && <div className="source-chips">
             {sourceChips(item.sources, selected, setSelected)}</div>}
+          {item.role === 'assistant' && webStates[item.id] && <WebNotice state={webStates[item.id]} />}
           {item.role === 'assistant' && item.status === 'complete' && item.error_code !== 'guard_rejected' && <div className="answer-actions">
             {item.sources.length > 0 && <button onClick={() => void favorite(item)}>☆ 收藏</button>}
             <FeedbackPanel saved={savedFeedback[item.id]} onSave={(kind, note) => feedback(item, kind, note)} />

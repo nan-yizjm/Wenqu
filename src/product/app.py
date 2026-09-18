@@ -38,6 +38,11 @@ ALLOWED_SETTINGS = {
     "candidate_k", "rrf_k", "bm25_k1", "bm25_b", "heading_repeat",
     # 记忆开关。默认关；关着时产品**根本不会调用**记忆提供者（见 chat.py）。
     "memory_enabled",
+    # 联网开关与"首次开启告知已看过"的确认。两者分开：`web_enabled` 是能力开关，
+    # `web_disclosure_acknowledged` 是"用户已经被告知什么会离开这台机器"的凭据。
+    # 没有后者的前者会被接口拒掉（见 patch_settings），这样"首次开启必须显式告知"
+    # 就不只是一句界面文案——文案会被改掉，规则不会。
+    "web_enabled", "web_disclosure_acknowledged",
 }
 DEFAULT_SETTINGS = {
     "provider": "ollama", "ollama_base_url": "http://127.0.0.1:11434",
@@ -45,6 +50,7 @@ DEFAULT_SETTINGS = {
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
     "deepseek_model": "deepseek-chat", "theme": "system",
     "memory_enabled": False,
+    "web_enabled": False, "web_disclosure_acknowledged": False,
     **{key: default for key, (default, _, _, _) in RETRIEVAL_PARAMETERS.items()},
 }
 SOURCE_MEDIA_TYPES = {
@@ -70,6 +76,8 @@ class SettingsPatch(BaseModel):
     bm25_b: float | None = Field(default=None, ge=0.0, le=1.0)
     heading_repeat: int | None = Field(default=None, ge=0, le=10)
     memory_enabled: bool | None = None
+    web_enabled: bool | None = None
+    web_disclosure_acknowledged: bool | None = None
 
     @field_validator("provider")
     @classmethod
@@ -182,11 +190,28 @@ def memory_state(chat) -> dict:
     return state
 
 
+def web_state(chat, settings: dict) -> dict:
+    """联网接缝的状态，供诊断上报。
+
+    与记忆不同，这里**不向后端要任何东西**：搜索协议没有"列出已有结果"这种便宜
+    调用，诊断不该为了显示一个数字去发一次请求——那等于让"打开诊断页"变成一次
+    出网。所以这个函数全程只读本机状态，不需要 try。
+    """
+    if chat is None:
+        return {"available": False}
+    provider = getattr(chat, "web", None)
+    return {"available": True,
+            "provider": getattr(provider, "name", "unknown"),
+            "configured": bool(getattr(provider, "configured", False)),
+            "enabled": bool(settings.get("web_enabled")),
+            "disclosure_acknowledged": bool(settings.get("web_disclosure_acknowledged"))}
+
+
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                        static_dir: Path | None = None, shutdown_callback=None,
                        retrieval_model_manager=None, material_run_inline=False,
                        chat_client_factory=None, material_encoder_factory=None,
-                       memory_provider_factory=None):
+                       memory_provider_factory=None, search_provider_factory=None):
     paths = (paths or ProductPaths.default()).ensure()
     credentials = credential_store or CredentialStore()
     model_manager = retrieval_model_manager or RetrievalModelManager(paths.model_cache)
@@ -224,7 +249,10 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                 lambda: current_settings(app.state.database), chat_client_factory,
                 # 记忆提供者的注入点。不传就是没有记忆（`NullMemoryProvider`），
                 # 出厂行为与"接缝不存在"逐字段一致。接入真实记忆系统时只改这里。
-                memory=memory_provider_factory() if memory_provider_factory else None)
+                memory=memory_provider_factory() if memory_provider_factory else None,
+                # 搜索后端的注入点。不传就是没有联网（`NullSearchProvider`），
+                # 此时即使把开关打开也不会发出任何请求。接入真实后端时只改这里。
+                web=search_provider_factory() if search_provider_factory else None)
             app.state.organize = OrganizeService(app.state.database, paths)
             app.state.support = SupportService(
                 app.state.database, paths, lambda: current_settings(app.state.database),
@@ -350,6 +378,15 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         unknown = set(values) - ALLOWED_SETTINGS
         if unknown:
             return JSONResponse({"error": "unknown_setting"}, status_code=422)
+        # 首次开启联网必须先看过"什么会离开这台机器"。这条不做成界面文案而做成接口
+        # 规则：文案会被改掉、会被跳过，规则不会。
+        acknowledged = values.get("web_disclosure_acknowledged",
+                                  current_settings(request.app.state.database)
+                                  .get("web_disclosure_acknowledged"))
+        if values.get("web_enabled") and not acknowledged:
+            return JSONResponse({"error": "web_disclosure_required",
+                                 "message": "开启联网前需先确认会发送的内容（只发送查询词）。"},
+                                status_code=422)
         request.app.state.database.set_settings(values)
         request.app.state.database.event("settings_updated", {"keys": sorted(values)})
         # 检索参数只在建引擎时读一次，改完要就地换引擎；换的是同一份索引版本，
@@ -670,6 +707,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             "memory": memory_state(request.app.state.chat)
                       | {"enabled": bool(current_settings(request.app.state.database)
                                          .get("memory_enabled"))},
+            "web": web_state(request.app.state.chat,
+                             current_settings(request.app.state.database)),
             "runtime": request.app.state.runtime_state,
             "retrieval_model": request.app.state.retrieval_model.status(),
         }

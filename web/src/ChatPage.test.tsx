@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Conversation, MessageSource } from './api'
+import type { Conversation, MessageSource, WebState } from './api'
 import { ChatPage } from './ChatPage'
 
 const seed: Conversation[] = [
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   detail: vi.fn(),
   source: vi.fn(),
+  stream: vi.fn(),
 }))
 
 vi.mock('./api', () => ({
@@ -23,7 +24,8 @@ vi.mock('./api', () => ({
     conversation: (id: string) => mocks.detail(id),
     createConversation: () => mocks.create(),
     deleteConversation: (id: string) => mocks.remove(id),
-    streamMessage: vi.fn(),
+    streamMessage: (id: string, body: unknown, onEvent: unknown, signal: unknown) =>
+      mocks.stream(id, body, onEvent, signal),
     stopMessage: vi.fn(),
     createFavorite: vi.fn(),
     feedback: vi.fn(),
@@ -36,6 +38,8 @@ let current: Conversation[]
 beforeEach(() => {
   mocks.list.mockReset(); mocks.remove.mockReset()
   mocks.create.mockReset(); mocks.detail.mockReset(); mocks.source.mockReset()
+  mocks.stream.mockReset()
+  mocks.stream.mockResolvedValue(undefined)
   mocks.source.mockResolvedValue({
     document_id: 'doc_a', version_id: 'ver_a', title: '推理.md',
     media_type: 'markdown', text: '分页管理 KV Cache。',
@@ -193,5 +197,79 @@ describe('ChatPage source layering', () => {
 
     const pressed = await screen.findAllByRole('button', { pressed: true })
     expect(pressed).toHaveLength(1)
+  })
+})
+
+const WEB_SOURCE: Omit<MessageSource, 'label'> = {
+  origin: 'web', chunk_id: 'web:w1', document_id: 'web', version_id: 'web',
+  title: 'PagedAttention 原论文', media_type: 'web', heading_path: 'arxiv.org',
+  locator: {
+    kind: 'web', url: 'https://arxiv.org/abs/2309.06180',
+    published_at: '2023-09-12T00:00:00Z', retrieved_at: '2026-09-18T10:00:00Z',
+  },
+  preview: 'PagedAttention 把 KV Cache 分成固定大小的页来管理。',
+  score: null, matched_tokens: [], channels: {},
+}
+
+describe('ChatPage web notice', () => {
+  /**
+   * 问一轮，让后端按给定的联网状态回一次流。
+   *
+   * 重取会话的桩也要返回同一条消息：答完之后组件会在 350ms 后重新拉一次会话，
+   * 若那时返回空消息列表，断言就会与这次重取赛跑（先通过后消失）。
+   */
+  async function ask(web: WebState, sources: Omit<MessageSource, 'label'>[] = [WEB_SOURCE]) {
+    const labelled = sources.map((source, index) => ({ ...source, label: `S${index + 1}` }))
+    const answer: Conversation = {
+      id: 'c1', title: '一个会话', created_at: '2026-01-01', updated_at: '2026-01-01',
+      messages: [{
+        id: 'a-new', conversation_id: 'c1', role: 'assistant', content: '答案 [S1]。',
+        status: 'complete', provider: null, model: null, index_version: null,
+        error_code: null, reply_to_message_id: null, sources: labelled,
+      }],
+    }
+    mocks.detail.mockImplementation(async () => answer)
+    mocks.stream.mockImplementation(async (_id: string, _body: unknown, onEvent: (event: unknown) => void) => {
+      onEvent({ type: 'retrieval', message_id: 'a-new', sources: labelled, web })
+      onEvent({ type: 'final', message_id: 'a-new', content: '答案 [S1]。', status: 'complete', sources: labelled })
+    })
+    render(<ChatPage />)
+    const box = await screen.findByPlaceholderText('询问你的资料；Shift + Enter 换行')
+    fireEvent.change(box, { target: { value: 'PagedAttention 是什么？' } })
+    fireEvent.click(screen.getByText('发送'))
+  }
+
+  it('says the answer is offline when the web backend failed', async () => {
+    await ask({ status: 'failed', provider: 'recording', detail: 'RuntimeError' })
+
+    // 联网失败不许静默降级成"看起来就像没开联网"。异常类型名也带出来，
+    // 否则用户没法判断是自己断网了还是后端坏了。
+    expect(await screen.findByText(/本次未能联网（RuntimeError）/)).toBeInTheDocument()
+  })
+
+  it('says no request went out when the switch is on but no backend exists', async () => {
+    await ask({ status: 'unconfigured', provider: 'none' })
+
+    expect(await screen.findByText(/还没有配置搜索后端/)).toBeInTheDocument()
+  })
+
+  it('stays quiet for the states that need no explanation', async () => {
+    // off / ok / empty 都不该冒提示：前两个是正常，第三个是真实结果不是故障。
+    await ask({ status: 'empty', provider: 'recording' })
+
+    // 用来源卡片等消息落地（答案正文里的 [S1] 会被渲染成引用元素，文本是断开的）。
+    await screen.findByText('PagedAttention 原论文')
+    expect(screen.queryByText(/本次未能联网/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/还没有配置搜索后端/)).not.toBeInTheDocument()
+  })
+
+  it('marks the web source as the third layer only once a second layer appears', async () => {
+    // 只有网络一层时不显示层名（P1 的规矩：多一层标签是视觉噪音）。真的与笔记
+    // 混在一起时才需要提醒"这条不是来自你的笔记"。
+    await ask({ status: 'ok', provider: 'recording' }, [NOTE_SOURCE, WEB_SOURCE])
+
+    expect(await screen.findByText('网络')).toBeInTheDocument()
+    expect(screen.getByText('笔记')).toBeInTheDocument()
+    expect(screen.getByText('PagedAttention 原论文')).toBeInTheDocument()
   })
 })

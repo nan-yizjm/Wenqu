@@ -20,6 +20,10 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
   const [modelState, setModelState] = useState(setup.retrieval_model)
   const [restartRequired, setRestartRequired] = useState(false)
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+  // 首次开启联网前必须先把"什么会离开这台机器"摆出来。后端也拒绝没有确认凭据就
+  // 打开（422 web_disclosure_required），所以这个界面不是"可选的礼貌"，而是那条
+  // 接口规则在前端的唯一合法入口。
+  const [disclosureOpen, setDisclosureOpen] = useState(false)
   const [resources, setResources] = useState<ResourcesIndex>({ docs: [], examples: [] })
   const restoreInput = useRef<HTMLInputElement>(null)
   useEffect(() => { void (async () => {
@@ -84,6 +88,14 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
     : memory.items === null || memory.items === undefined
       ? `记忆已开启（${memory.provider}），但读取条目数失败：${memory.error || '未知错误'}`
       : `记忆已开启（${memory.provider}），共 ${memory.items} 条。`
+  // 联网接缝的真实状态。与记忆一样，必须分清"关着""开着但没有后端""开着且有
+  // 后端"三种——把后两种都说成"已开启"会让用户以为提问已经出网了。
+  const web = diagnostics?.web
+  const webText = !web ? '无法读取联网状态；本地服务可能刚刚启动。'
+    : !web.enabled ? '联网已关闭：工作台不会发出任何网络请求。'
+    : !web.configured
+      ? `联网已开启，但还没有配置搜索后端（当前：${web.provider}），因此仍然不会发出任何请求。`
+      : `联网已开启（${web.provider}）：每轮提问会把问题本身作为搜索关键词发送给该服务。`
   const vectorText = form.retrieval_mode === 'bm25' ? '当前按词面匹配，不做语义召回。'
     : vector.status === 'ready' ? `语义索引已就绪，搜索同时使用关键词与语义。${truncationNote}`
     : vector.status === 'building' ? '正在后台建立语义索引，完成前仍按关键词检索。'
@@ -127,6 +139,33 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
       </div>
         <p className="hint">默认关闭。关闭时工作台<strong>根本不会调用</strong>记忆提供者，而不是调用了再丢掉结果——所以"关着"对任何实现都是可验证的。</p>
         <div className="status-line"><span className={`dot ${memory?.enabled ? 'green' : 'amber'}`} />{memoryText}</div></section>
+      <section className="card"><h3>联网补充</h3><div className="segmented">
+        <button className={form.web_enabled ? 'active' : ''}
+          onClick={() => {
+            // 没确认过告知就只弹出告知，**不**顺手把开关打开——否则用户点"保存"
+            // 会撞上后端的 422，而他并不知道自己在确认什么。
+            if (form.web_disclosure_acknowledged) setForm({ ...form, web_enabled: true })
+            else setDisclosureOpen(true)
+          }}>开启</button>
+        <button className={!form.web_enabled ? 'active' : ''}
+          onClick={() => { setForm({ ...form, web_enabled: false }); setDisclosureOpen(false) }}>关闭</button>
+      </div>
+        <p className="hint">默认关闭。开启后可以把问题作为关键词发往搜索服务，结果作为「网络」层与笔记分开标注；关闭时工作台<strong>一个字节都不会发出</strong>。本期没有内置任何搜索后端，所以打开开关也不会有请求——具体接哪家尚未确定。</p>
+        <div className="status-line"><span className={`dot ${web?.enabled ? (web.configured ? 'green' : 'amber') : 'amber'}`} />{webText}</div>
+        {disclosureOpen && <div className="web-disclosure">
+          <p><strong>开启联网后，会离开这台机器的只有一件东西：</strong>你的问题本身（作为搜索关键词）。</p>
+          <p><strong>不会发送：</strong>笔记正文、检索到的片段、对话历史、任何文件内容。</p>
+          <p>搜索结果只保存在本机，并与笔记分层标注。联网失败时会明确写出"本次未能联网"，不会静默降级。</p>
+          <div className="disclosure-actions">
+            <button className="secondary" onClick={() => {
+              setForm({ ...form, web_enabled: true, web_disclosure_acknowledged: true })
+              setDisclosureOpen(false); setMessage('已确认告知；保存后开始生效')
+            }}>我明白，开启联网</button>
+            <button className="ghost" onClick={() => {
+              setForm({ ...form, web_enabled: false }); setDisclosureOpen(false)
+            }}>取消</button>
+          </div>
+        </div>}</section>
       <section className="card"><h3>检索模型</h3><div className="status-line"><span className={`dot ${modelState.status === 'ready' ? 'green' : 'amber'}`} />
         {modelState.status === 'ready' ? 'multilingual-e5-small 已准备' : modelState.detail || '尚未下载'}</div>
         <p className="hint">固定版本，默认使用 CPU。首次准备会下载模型并执行 384 维归一化向量检查。混合检索依赖它；只开关键词检索的话不准备也不影响搜索。</p>

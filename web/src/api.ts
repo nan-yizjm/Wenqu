@@ -11,6 +11,13 @@ export type ProductSettings = {
   theme: 'system' | 'light' | 'dark'
   /** 记忆接缝的开关。默认关；关着时后端**根本不会调用**记忆提供者。 */
   memory_enabled: boolean
+  /** 联网开关。默认关；关着时后端一个字节都不发。 */
+  web_enabled: boolean
+  /**
+   * "用户已经被告知什么会离开这台机器"的凭据。与开关分开：后端**拒绝**在没有这个
+   * 凭据时打开联网，所以界面必须先把告知展示出来（见 App.tsx 的设置页）。
+   */
+  web_disclosure_acknowledged: boolean
 }
 
 export type VectorIndexState = {
@@ -45,6 +52,11 @@ export type Locator =
   | { kind: 'notebook'; cell: number; cell_type: string; start_line: number; end_line: number }
   /** 记忆条目没有行号可定位，只能回到它派生自哪次对话/哪份笔记。 */
   | { kind: 'memory'; id: string; derived_from: string }
+  /**
+   * 网络来源定位到 URL。`published_at` 是这条事实何时成立、`retrieved_at` 是何时
+   * 看到的——两者可能差很远，时效判断要的正是这个差。
+   */
+  | { kind: 'web'; url: string; published_at: string | null; retrieved_at: string | null }
 
 export type Library = { id: string; name: string; kind: 'folder' | 'uploads'; root_path?: string; document_count: number; ready_count: number }
 /** 应用内文件夹选择器看到的一层目录。`parent` 为空说明已经是盘符/根，不能再往上。 */
@@ -76,7 +88,7 @@ export type Favorite = FavoriteSummary & { sources: MessageSource[] }
 export type FavoriteFilters = { library?: string; tag?: string; feedback?: FeedbackKind; days?: '7d' | '30d' }
 export type FavoritesView = { favorites: FavoriteSummary[]; libraries: { id: string; name: string }[]; tags: string[]; total: number }
 export type FeedbackKind = 'helpful' | 'missing' | 'citation_wrong' | 'answer_wrong'
-export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; provider?: string; model?: string; message?: string; citation_warning?: boolean; rejected?: boolean }
+export type StreamEvent = { type: 'retrieval' | 'generation' | 'token' | 'final' | 'stopped' | 'error'; message_id: string; text?: string; content?: string; status?: ChatMessage['status']; sources?: MessageSource[]; web?: WebState; provider?: string; model?: string; message?: string; citation_warning?: boolean; rejected?: boolean }
 
 export type BundledResource = { name: string; size: number; modified_at: string }
 export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResource[] }
@@ -91,6 +103,24 @@ export type MemoryDiagnostics = {
   error?: string
   enabled: boolean
 }
+/**
+ * 联网这一层的结果状态。每一轮问答都有一个确定值——不给"说不清到底联没联上"留
+ * 中间态，否则用户没法判断眼前的回答里有没有外部信息。
+ *
+ * - `off`：开关关着（或没开过告知）；
+ * - `unconfigured`：开关开着但没配任何后端，**一个请求都没发**；
+ * - `ok` / `empty`：问到了，有结果 / 没结果；
+ * - `failed`：后端报错，`detail` 是异常类型名，界面要显示"本次未能联网"。
+ */
+export type WebStatus = 'off' | 'unconfigured' | 'ok' | 'empty' | 'failed'
+export type WebState = { status: WebStatus; provider: string; detail?: string }
+export type WebDiagnostics = {
+  available: boolean
+  provider?: string
+  configured?: boolean
+  enabled?: boolean
+  disclosure_acknowledged?: boolean
+}
 export type Diagnostics = {
   product_version: string
   python: string
@@ -99,6 +129,7 @@ export type Diagnostics = {
   data_directories: { root_exists: boolean; database_exists: boolean; model_cache_exists: boolean }
   credentials: { deepseek_configured: boolean }
   memory: MemoryDiagnostics
+  web: WebDiagnostics
   runtime: { status: string; detail: string | null }
   retrieval_model: RetrievalModelState
 }

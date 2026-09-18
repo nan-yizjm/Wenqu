@@ -29,6 +29,19 @@ const noteHit: SourceRef = {
   preview: '分页管理 KV Cache。', score: 1,
 }
 
+const WEB_URL = 'https://arxiv.org/abs/2309.06180'
+const WEB_SNIPPET = 'PagedAttention 把 KV Cache 分成固定大小的页来管理。'
+
+const webHit: SourceRef = {
+  origin: 'web', chunk_id: 'web:w1', document_id: 'web', version_id: 'web',
+  title: 'PagedAttention 原论文', media_type: 'web', heading_path: 'arxiv.org',
+  locator: {
+    kind: 'web', url: WEB_URL,
+    published_at: '2023-09-12T00:00:00Z', retrieved_at: '2026-09-18T10:00:00Z',
+  },
+  preview: WEB_SNIPPET,
+}
+
 beforeEach(() => {
   mocks.source.mockReset()
 })
@@ -76,5 +89,38 @@ describe('SourcePanel source layers', () => {
     render(<SourcePanel hit={{ ...noteHit, origin: undefined }} close={() => {}} />)
 
     await waitFor(() => expect(mocks.source).toHaveBeenCalledWith('doc_a', 'ver_a'))
+  })
+
+  it('opens a web source at its url instead of asking for a local snapshot', async () => {
+    render(<SourcePanel hit={webHit} close={() => {}} />)
+
+    const link = await screen.findByRole('link', { name: WEB_URL })
+    // 网络来源的 document_id 是占位串，按它去请求 /versions/web/source 只会 404。
+    expect(mocks.source).not.toHaveBeenCalled()
+    expect(link).toHaveAttribute('href', WEB_URL)
+    // 外链必须带 noopener noreferrer：新开的页面不该拿到本工作台的 window 引用。
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getByText(WEB_SNIPPET)).toBeInTheDocument()
+  })
+
+  it('keeps publication time and fetch time apart for a web source', async () => {
+    render(<SourcePanel hit={webHit} close={() => {}} />)
+
+    // 这两个时间差很远时才是关键（2023 年的论文，今天才被搜到）。混成一个
+    // "时间" 会让用户以为这条事实是今天成立的。
+    expect(await screen.findByText('2023-09-12 00:00')).toBeInTheDocument()
+    expect(screen.getByText('2026-09-18 10:00')).toBeInTheDocument()
+    expect(screen.getByText(/没有正文快照/)).toBeInTheDocument()
+  })
+
+  it('says so instead of pretending a web source has a link', async () => {
+    render(<SourcePanel hit={{
+      ...webHit,
+      locator: { kind: 'web', url: '', published_at: null, retrieved_at: null },
+    }} close={() => {}} />)
+
+    expect(await screen.findByText('这条来源没有带链接')).toBeInTheDocument()
+    expect(screen.getByText('未知')).toBeInTheDocument()
+    expect(screen.getByText('未记录')).toBeInTheDocument()
   })
 })

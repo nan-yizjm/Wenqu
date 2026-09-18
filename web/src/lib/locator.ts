@@ -9,6 +9,13 @@ export function locatorLabel(locator: Locator): string {
   if (locator.kind === 'memory') {
     return locator.derived_from ? `来自记忆 · ${locator.derived_from}` : '来自记忆'
   }
+  // 网络来源要答案的是"这条多新"，不是"它在第几段"。拿不到发布时间就如实说
+  // 拿不到——没有时间的外部事实本来就无从判断时效，不该假装它有个日期。
+  if (locator.kind === 'web') {
+    return locator.published_at
+      ? `发布于 ${locator.published_at.slice(0, 10)}`
+      : '发布时间未知'
+  }
   return `第 ${locator.start_line}–${locator.end_line} 行`
 }
 

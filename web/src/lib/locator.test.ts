@@ -20,6 +20,22 @@ describe('locatorLabel', () => {
   it('still says "来自记忆" when the derivation is unknown', () => {
     expect(locatorLabel({ kind: 'memory', id: 'm1', derived_from: '' })).toBe('来自记忆')
   })
+
+  // 网络来源要答案的是"这条多新"。拿不到发布时间就如实说拿不到——没有时间的外部
+  // 事实本来就无从判断时效，编一个今天的时间比不显示更坏。
+  it('gives the publication date for a web source, not a line range', () => {
+    expect(locatorLabel({
+      kind: 'web', url: 'https://arxiv.org/abs/2309.06180',
+      published_at: '2023-09-12T00:00:00Z', retrieved_at: '2026-09-18T10:00:00Z',
+    })).toBe('发布于 2023-09-12')
+  })
+
+  it('says the publication time is unknown rather than guessing one', () => {
+    expect(locatorLabel({
+      kind: 'web', url: 'https://example.com/a', published_at: null,
+      retrieved_at: '2026-09-18T10:00:00Z',
+    })).toBe('发布时间未知')
+  })
 })
 
 describe('locatorLines', () => {
@@ -29,6 +45,10 @@ describe('locatorLines', () => {
     expect(locatorLines({ kind: 'pdf', page: 3 })).toBeNull()
     // 记忆条目没有行号可高亮：面板要按"没有可高亮区间"处理，而不是拿 undefined 去比大小。
     expect(locatorLines({ kind: 'memory', id: 'm1', derived_from: 'x' })).toBeNull()
+    // 网络来源同样没有行号：它不在本地任何文件里。
+    expect(locatorLines({
+      kind: 'web', url: 'https://example.com/a', published_at: null, retrieved_at: null,
+    })).toBeNull()
   })
 })
 
