@@ -4,6 +4,7 @@ import { LibraryPage } from './LibraryPage'
 import { ChatPage } from './ChatPage'
 import { FavoritesPage } from './FavoritesPage'
 import { StudioPage } from './StudioPage'
+import { ExitControl, SignedOff } from './ExitControl'
 import { applyTheme, THEME_OPTIONS, watchSystemTheme } from './lib/theme'
 
 type Page = 'library' | 'chat' | 'studio' | 'favorites' | 'settings'
@@ -15,7 +16,9 @@ const nav: { id: Page; icon: string; label: string }[] = [
   { id: 'settings', icon: '⚙', label: '设置' },
 ]
 
-function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<void> }) {
+function Settings({ setup, reload, onExit }: {
+  setup: SetupState; reload: () => Promise<void>; onExit: () => void
+}) {
   const [form, setForm] = useState<ProductSettings>(setup.settings)
   const [key, setKey] = useState('')
   const [message, setMessage] = useState('')
@@ -193,7 +196,7 @@ function Settings({ setup, reload }: { setup: SetupState; reload: () => Promise<
         <div className="support-actions"><button className="secondary" onClick={() => void backup()}>下载数据备份</button><button className="secondary" onClick={() => restoreInput.current?.click()}>从备份恢复</button>
           <a className="secondary export-link" href={api.diagnosticExportUrl()}>下载脱敏诊断</a></div>
         <input ref={restoreInput} className="hidden" type="file" accept=".zip" onChange={event => void restore(event.target.files?.[0])} />
-        {restartRequired && <button className="primary" onClick={() => void api.shutdown()}>退出工作台</button>}</section>
+        {restartRequired && <ExitControl onExit={onExit} compact />}</section>
     </div>
     <div className="save-bar"><span>{message}</span>{!restartRequired && <button className="primary" onClick={save}>保存设置</button>}</div>
   </div>
@@ -226,7 +229,7 @@ function Welcome({ setup, done }: { setup: SetupState; done: () => Promise<void>
     <p className="fineprint">下一步将在工作台中添加资料和准备检索模型。</p></div></main>
 }
 
-function Recovery({ setup }: { setup: SetupState }) {
+function Recovery({ setup, onExit }: { setup: SetupState; onExit: () => void }) {
   const backups = setup.recovery_backups || []
   const [selected, setSelected] = useState(backups[0]?.name || '')
   const [message, setMessage] = useState('')
@@ -239,7 +242,7 @@ function Recovery({ setup }: { setup: SetupState }) {
     <p>工作台没有继续加载资料或模型，以免扩大损坏。请选择升级前自动备份恢复；当前失败数据库也会另行保留。</p>
     {backups.length ? <><label>可用迁移备份<select value={selected} onChange={event => setSelected(event.target.value)}>{backups.map(item => <option key={item.name} value={item.name}>{item.name} · {Math.ceil(item.size / 1024)} KB</option>)}</select></label>
       <button className="primary wide" onClick={() => void restore()}>恢复所选备份</button></> : <p className="error">没有找到可自动恢复的迁移备份。请保留用户数据目录，并使用脱敏日志寻求帮助。</p>}
-    {message && <p className="status-line">{message}</p>}{message && <button className="secondary" onClick={() => void api.shutdown()}>退出工作台</button>}
+    {message && <p className="status-line">{message}</p>}{message && <ExitControl onExit={onExit} compact />}
   </section></main>
 }
 
@@ -247,19 +250,28 @@ export default function App() {
   const [setup, setSetup] = useState<SetupState | null>(null)
   const [page, setPage] = useState<Page>('library')
   const [failure, setFailure] = useState('')
+  // 本地服务停掉之后，这一页不能再发任何请求——所以整页换成收尾页，而不是留在原界面上
+  // 让每个请求都失败（那看起来像产品坏了，其实是我们自己把服务关了）。
+  const [signedOff, setSignedOff] = useState(false)
   const reload = async () => { try { setSetup(await api.setup()) } catch (e) { setFailure(e instanceof Error ? e.message : '无法连接本地服务') } }
   useEffect(() => { void reload() }, [])
   const theme = setup?.settings.theme
   useEffect(() => { if (theme) applyTheme(theme) }, [theme])
   useEffect(() => { if (theme) return watchSystemTheme(theme) }, [theme])
+  // 退出态优先于其它所有分支：服务已经没了，`setup` 里那份状态再显示也没意义。
+  if (signedOff) return <SignedOff />
   if (failure) return <main className="fatal"><h1>工作台没有准备好</h1><p>{failure}</p><button onClick={() => location.reload()}>重新连接</button></main>
   if (!setup) return <main className="loading"><div className="spinner" /><p>正在打开知识工作台…</p></main>
-  if (setup.recovery_required) return <Recovery setup={setup} />
+  if (setup.recovery_required) return <Recovery setup={setup} onExit={() => setSignedOff(true)} />
   if (!setup.settings.onboarding_complete) return <Welcome setup={setup} done={reload} />
   return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">OR</div><div><strong>{setup.settings.display_name}</strong><span>个人知识工作台</span></div></div>
     <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} title={item.label} onClick={() => setPage(item.id)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{item.label}</span></button>)}</nav>
-    <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div></aside>
-    <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} />
+    <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div>
+    {/* 退出入口常驻在侧栏，而不是只放在设置页：正常使用下**必须有一个**能停下来
+        的地方，而常驻进程不会自己结束（关标签不算）。窄屏时侧栏折成图标条，
+        这个组件是 `.sidebar-status` 的直接子元素，所以不会被那条隐藏规则吃掉。 */}
+    <ExitControl onExit={() => setSignedOff(true)} /></aside>
+    <main className="content">{page === 'settings' ? <Settings setup={setup} reload={reload} onExit={() => setSignedOff(true)} />
       : page === 'library' ? <LibraryPage setupReload={reload} />
       : page === 'chat' ? <ChatPage />
       : page === 'studio' ? <StudioPage /> : <FavoritesPage />}</main>

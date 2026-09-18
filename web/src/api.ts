@@ -438,7 +438,8 @@ export const api = {
   restore: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ restored: boolean; restart_required: boolean }>(
     '/api/v1/system/restore', { method: 'POST', body }) },
   diagnosticExportUrl: () => '/api/v1/system/diagnostics/export',
-  shutdown: () => request<{ status: string }>('/api/v1/system/shutdown', { method: 'POST' }),
+  shutdown: () => request<{ status: string; message: string }>(
+    '/api/v1/system/shutdown', { method: 'POST' }),
   restoreMigration: (backupName: string) => request<{ restored: boolean; restart_required: boolean }>(
     '/api/v1/system/recovery/restore', { method: 'POST', body: JSON.stringify({ backup_name: backupName }) }),
 }

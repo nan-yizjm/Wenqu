@@ -240,3 +240,34 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
 .studio-infographic-degraded p{margin:8px 0 0;line-height:1.7}.studio-infographic-degraded p:first-child{margin-top:0}
 .studio-degraded-line{color:var(--warn-text);font-weight:600}
 .studio-infographic-degraded .hint{color:var(--text-soft)}
+
+/* ── 退出入口 ───────────────────────────────────────────────────────
+   常驻在侧栏底部，而不是只留在设置页：这是个常驻进程，不会自己结束，而"关掉
+   浏览器标签"最容易被误当成退出——所以按钮旁边直接把这句话写出来。
+   窄屏时侧栏折成图标条，跟着 nav 的做法只留"退出"两个字（title 里仍有完整说明）。 */
+.exit-control{margin-top:14px;padding:0 8px 2px;display:flex;flex-direction:column;gap:7px}
+.exit-control .exit-open{width:100%;font-size:12px;padding:9px 10px}
+.exit-note{font-size:10px;line-height:1.5;color:var(--text-muted)}
+.exit-question{margin:0;font-size:11px;line-height:1.65;color:var(--text-muted)}
+.exit-actions{display:flex;gap:6px}
+.exit-actions .secondary,.exit-actions .ghost{margin:0;font-size:11px;padding:7px 10px}
+.exit-control .error{font-size:11px;line-height:1.55}
+
+/* 退出之后的收尾页。服务已经停了，这一页**不能再发任何请求**，所以它不显示实时
+   状态，只交代"东西都还在"和"下次怎么回来"。 */
+.signed-off{min-height:100vh;display:grid;place-items:center;background:var(--bg);padding:24px}
+.signed-off .setup-card{margin:0;width:min(560px,92vw);padding:44px}
+.signed-off h1{font-size:28px;margin:22px 0 16px}
+.signed-off p{color:var(--text-soft);line-height:1.8}
+.signed-off strong{color:var(--accent-text)}
+.signed-off .hint{color:var(--text-muted);margin-bottom:0}
+
+@media(max-width:1000px){
+.exit-label{display:none}
+.exit-control{margin-top:10px;padding:0 0 2px}
+.exit-note{display:none}
+.exit-question{font-size:10px}
+.exit-actions{flex-direction:column}
+.exit-actions .secondary,.exit-actions .ghost{width:100%;padding:7px 4px}
+.signed-off .setup-card{padding:30px}
+}
