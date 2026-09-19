@@ -174,6 +174,105 @@ class ProductMaterialTests(unittest.TestCase):
         self.assertEqual([d["status"] for d in refreshed], ["ready"])
         self.assertEqual(refreshed[0]["display_name"], "笔记.md")
 
+    def test_disconnecting_a_library_hides_its_documents_and_search(self):
+        """断开归类 = 来源停用 + 其下资料移除 + 检索立即排除；**磁盘文件不动**。
+
+        一次事务里做完停用与软删，快照只发布一次；刷新旧 id 回 404，
+        因为 refresh 只认 `active=1` 的归类。
+        """
+        folder = self.root / "断开资料"
+        folder.mkdir()
+        (folder / "第一篇.md").write_text("# 第一篇\n\n断开后应当搜不到的内容。", encoding="utf-8")
+        (folder / "第二篇.md").write_text("# 第二篇\n\n另一篇断开后搜不到。", encoding="utf-8")
+        library = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)}).json()
+        library_id = library["library_id"]
+        self.assertTrue(self.client.get(
+            "/api/v1/search", params={"q": "断开后应当搜不到"}).json()["results"])
+        database = self.client.app.state.database
+        versions_before = database.fetchone("SELECT COUNT(*) AS n FROM index_versions")["n"]
+
+        result = self.client.delete(f"/api/v1/libraries/{library_id}")
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body["deleted"], 2)
+        self.assertEqual(body["name"], "断开资料")
+
+        self.assertEqual(
+            [item["id"] for item in self.client.get("/api/v1/libraries").json()["libraries"]
+             if item["id"] == library_id], [])
+        self.assertEqual(self.client.get("/api/v1/documents").json()["documents"], [])
+        self.assertEqual(self.client.get(
+            "/api/v1/search", params={"q": "断开后应当搜不到"}).json()["results"], [])
+        self.assertEqual(database.fetchone("SELECT COUNT(*) AS n FROM index_versions")["n"],
+                         versions_before + 1)
+        self.assertEqual(self.client.post(
+            f"/api/v1/libraries/{library_id}/refresh").status_code, 404)
+        self.assertTrue((folder / "第一篇.md").is_file())
+        self.assertTrue((folder / "第二篇.md").is_file())
+
+    def test_reconnecting_the_same_folder_after_disconnect_imports_fresh(self):
+        """断开后同一路径重新连接：旧软删行不复用，新归类从头导入。"""
+        folder = self.root / "重连资料"
+        folder.mkdir()
+        (folder / "笔记.md").write_text("# 笔记\n\n重连后重新导入的内容。", encoding="utf-8")
+        first = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)}).json()
+        self.assertEqual(self.client.delete(
+            f"/api/v1/libraries/{first['library_id']}").status_code, 200)
+
+        second = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)}).json()
+        self.assertNotIn("already_connected", second)
+        self.assertNotEqual(second["library_id"], first["library_id"])
+        documents = self.client.get("/api/v1/documents").json()["documents"]
+        self.assertEqual([d["status"] for d in documents], ["ready"])
+        self.assertTrue(self.client.get(
+            "/api/v1/search", params={"q": "重连后重新导入"}).json()["results"])
+
+    def test_delete_library_rejects_uploads_and_unknown_ids(self):
+        """上传库不是"归类"，断开没有意义（逐篇移除即可）；未知 id 保持 404。"""
+        uploads = [item for item in self.client.get("/api/v1/libraries").json()["libraries"]
+                   if item["kind"] == "uploads"]
+        self.assertEqual(uploads, [])
+        library_id = "lib_ghost"
+        missing = self.client.delete(f"/api/v1/libraries/{library_id}")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error"], "library_not_found")
+
+    def test_delete_library_rejects_the_uploads_library_directly(self):
+        """uploads 库真实存在（上传后），但它不是文件夹归类，断开要回 422。"""
+        self.client.post("/api/v1/documents/upload", files={"file": (
+            "上传.md", "# 上传\n\n上传库的内容。".encode("utf-8"), "text/markdown")})
+        uploads = [item for item in self.client.get("/api/v1/libraries").json()["libraries"]
+                   if item["kind"] == "uploads"]
+        self.assertEqual(len(uploads), 1)
+        rejected = self.client.delete(f"/api/v1/libraries/{uploads[0]['id']}")
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["error"], "library_not_removable")
+        self.assertEqual(len(self.client.get("/api/v1/documents").json()["documents"]), 1)
+
+    def test_revived_document_of_a_disconnected_library_stays_out_of_search(self):
+        """断开与刷新扫描并发时，扫描可能把个别文档的 removed_at 清回去；
+        快照查询里的 `libraries.active=1` 是最后一道闸：来源已停用，
+        资料就算"复活"也进不了检索。"""
+        folder = self.root / "竞态资料"
+        folder.mkdir()
+        (folder / "笔记.md").write_text("# 笔记\n\n断开后再复活也搜不到的内容。", encoding="utf-8")
+        library = self.client.post("/api/v1/libraries/folders", json={"path": str(folder)}).json()
+        self.assertEqual(self.client.delete(
+            f"/api/v1/libraries/{library['library_id']}").status_code, 200)
+
+        database = self.client.app.state.database
+        with database.transaction() as connection:
+            connection.execute(
+                "UPDATE documents SET status='ready', removed_at=NULL WHERE library_id=?",
+                (library["library_id"],))
+        # 直接改库不会进内存快照；真实竞态里是扫描收尾的 _publish_snapshot()
+        # 把复活文档带进检索，这里显式走同一条路，active 过滤才有被测的机会。
+        self.client.app.state.materials._publish_snapshot()
+
+        self.assertEqual(self.client.get(
+            "/api/v1/search", params={"q": "复活也搜不到"}).json()["results"], [])
+        self.assertEqual(self.client.get("/api/v1/documents").json()["documents"], [])
+
     def test_text_pdf_keeps_page_and_scanned_pdf_fails_clearly(self):
         valid = self.client.post(
             "/api/v1/documents/upload",

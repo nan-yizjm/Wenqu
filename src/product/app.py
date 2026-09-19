@@ -529,6 +529,17 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             return JSONResponse({"error": "library_not_found", "message": str(error.args[0])},
                                 status_code=404)
 
+    @app.delete("/api/v1/libraries/{library_id}")
+    async def remove_library(library_id: str, request: Request):
+        try:
+            return request.app.state.materials.remove_library(library_id)
+        except KeyError as error:
+            return JSONResponse({"error": "library_not_found", "message": str(error.args[0])},
+                                status_code=404)
+        except ValueError as error:
+            return JSONResponse({"error": "library_not_removable", "message": str(error)},
+                                status_code=422)
+
     @app.get("/api/v1/documents")
     async def documents(request: Request):
         return {"documents": request.app.state.materials.list_documents()}

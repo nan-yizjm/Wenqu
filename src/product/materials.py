@@ -303,6 +303,7 @@ class MaterialService:
             SELECT c.*, d.display_name, d.media_type
             FROM document_chunks c
             JOIN documents d ON d.id=c.document_id AND d.current_version_id=c.version_id
+            JOIN libraries l ON l.id=d.library_id AND l.active=1
             WHERE d.removed_at IS NULL AND d.status IN ('ready', 'updating')
             ORDER BY d.id, c.position
         """)
@@ -375,6 +376,7 @@ class MaterialService:
             SELECT c.*, d.display_name, d.media_type
             FROM document_chunks c
             JOIN documents d ON d.id=c.document_id AND d.current_version_id=c.version_id
+            JOIN libraries l ON l.id=d.library_id AND l.active=1
             WHERE d.removed_at IS NULL AND d.status IN ('ready', 'updating')
             ORDER BY d.id, c.position
         """)
@@ -860,6 +862,39 @@ class MaterialService:
         if not result["deleted"]:
             raise KeyError("资料不存在。")
         return result
+
+    def remove_library(self, library_id: str):
+        """断开一个文件夹归类：停用来源，其下资料随之移除，**原文件不动**。
+
+        "移除"沿用全库同一套软删口径（`removed_at` 标记，行与快照都保留），
+        这样收藏与历史引用不会悬空。`libraries.active=0` 之后：
+
+        - `list_libraries` / `list_documents` 都是 `active=1` 视角，界面上立即消失；
+        - `connect_folder` 的"已连接"判断同样只看 `active=1`，同一路径重新连接
+          会创建新归类并重新导入，旧软删行不再被复用；
+        - 快照查询（`_load_snapshot` / `_publish_snapshot`）也带 `active=1`，
+          所以即使刷新扫描还在半路上、把个别文档的 `removed_at` 清了回去，
+          那些资料也进不了检索，断开仍然立即生效。
+
+        一次事务做完停用与软删，快照只发布一次——理由与 `remove_documents`
+        相同：逐条删会重建 N 次索引版本。
+        """
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT id, name, kind FROM libraries WHERE id=? AND active=1", (library_id,)).fetchone()
+            if not row:
+                raise KeyError("资料归类不存在。")
+            if row["kind"] != 'folder':
+                raise ValueError("上传文件的资料库不能断开，逐篇移除即可。")
+            deleted = connection.execute("""
+                UPDATE documents SET status='removed', removed_at=?, updated_at=?
+                WHERE library_id=? AND removed_at IS NULL
+            """, (utc_now(), utc_now(), library_id)).rowcount
+            connection.execute(
+                "UPDATE libraries SET active=0, updated_at=? WHERE id=?", (utc_now(), library_id))
+        if deleted:
+            self._publish_snapshot()
+        return {"library_id": library_id, "name": row["name"], "deleted": deleted, "skipped": []}
 
     def retry_document(self, document_id: str):
         row = self.database.fetchone(
