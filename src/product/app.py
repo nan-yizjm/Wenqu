@@ -34,6 +34,9 @@ from .support import MAX_BACKUP_BYTES, SupportService
 ALLOWED_SETTINGS = {
     "provider", "ollama_base_url", "ollama_model", "onboarding_complete",
     "display_name", "retrieval_mode", "deepseek_model", "theme",
+    # 皮肤模板（paper/slate/sand）：只影响 styles.css 里哪一组 token 生效，
+    # 不改变任何行为——所以校验只认三个值，其余一律 422。
+    "theme_template",
     # 检索参数（见 materials.RETRIEVAL_PARAMETERS）。界面上没有开关，只为单变量
     # 实验开放：默认值就是产品一直以来的行为。
     "candidate_k", "rrf_k", "bm25_k1", "bm25_b", "heading_repeat",
@@ -50,6 +53,7 @@ DEFAULT_SETTINGS = {
     "ollama_model": "qwen2.5:7b", "onboarding_complete": False,
     "display_name": "我的知识工作台", "retrieval_mode": "bm25",
     "deepseek_model": "deepseek-chat", "theme": "system",
+    "theme_template": "paper",
     "memory_enabled": False,
     "web_enabled": False, "web_disclosure_acknowledged": False,
     **{key: default for key, (default, _, _, _) in RETRIEVAL_PARAMETERS.items()},
@@ -77,6 +81,7 @@ class SettingsPatch(BaseModel):
     retrieval_mode: str | None = None
     deepseek_model: str | None = Field(default=None, max_length=100)
     theme: str | None = None
+    theme_template: str | None = None
     candidate_k: int | None = Field(default=None, ge=1, le=200)
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
     bm25_k1: float | None = Field(default=None, gt=0.0, le=10.0)
@@ -98,6 +103,13 @@ class SettingsPatch(BaseModel):
     def theme_allowed(cls, value):
         if value is not None and value not in ("system", "light", "dark"):
             raise ValueError("theme 只能是 system、light 或 dark")
+        return value
+
+    @field_validator("theme_template")
+    @classmethod
+    def template_allowed(cls, value):
+        if value is not None and value not in ("paper", "slate", "sand"):
+            raise ValueError("theme_template 只能是 paper、slate 或 sand")
         return value
 
     @field_validator("retrieval_mode")

@@ -61,6 +61,27 @@ class ProductFoundationTests(unittest.TestCase):
         self.assertEqual(self.client.patch("/api/v1/settings", json={
             "ollama_base_url": "http://remote.test:11434"}).status_code, 422)
 
+    def test_only_the_three_known_templates_are_accepted(self):
+        """模板名写错时必须是 422，不能落库。
+
+        落库一个前端不认识的模板名，界面会静默停在默认皮肤上——用户改了设置、
+        看起来"保存成功"，观感却没变，比报错难查得多。
+        """
+        default = self.client.get("/api/v1/settings").json()["settings"]["theme_template"]
+        self.assertEqual(default, "paper")
+
+        for name in ("paper", "slate", "sand"):
+            with self.subTest(template=name):
+                saved = self.client.patch("/api/v1/settings", json={"theme_template": name})
+                self.assertEqual(saved.status_code, 200)
+                self.assertEqual(saved.json()["settings"]["theme_template"], name)
+
+        self.assertEqual(self.client.patch(
+            "/api/v1/settings", json={"theme_template": "neon"}).status_code, 422)
+        # 被拒的那次不该改变已保存的值。
+        self.assertEqual(self.client.get("/api/v1/settings").json()["settings"]["theme_template"],
+                         "sand")
+
     def test_settings_can_be_echoed_back_to_patch(self):
         """设置页把整份 settings 原样回写。
 
