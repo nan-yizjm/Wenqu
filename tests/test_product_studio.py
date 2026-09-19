@@ -69,40 +69,94 @@ class BacklinkReportTests(unittest.TestCase):
 
         self.assertEqual(report["missing"], [{"line": 4, "text": "没来源的一句。"}])
 
+    def test_a_list_item_is_still_an_assertion_but_listed_without_its_marker(self):
+        """指南正文是列表（一行一句），判定与展示要分开：
+
+        - 判定：列表项**算断言**，且仍是一行一句 ⇒ 命中率口径和以前一样是句子级；
+        - 展示：清单里挂一个 `- ` 是噪声，用户要读的是句子本身。
+        """
+        report = backlink_report("## 小节\n- 有来源 [S1]。\n- 没来源的一句。", {"S1"})
+
+        self.assertEqual(report["assertions"], 2)
+        self.assertEqual(report["with_source"], 1)
+        self.assertEqual(report["missing"], [{"line": 3, "text": "没来源的一句。"}])
+
 
 class MindmapTests(unittest.TestCase):
     """思维导图零模型调用，所以它可以被完全确定性地测试。"""
 
     def test_the_tree_follows_the_heading_path(self):
-        mindmap = build_mindmap("推理优化", [source(1, "推理.md", "推理.md > 推理 > PagedAttention")])
+        """夹具照真实数据来：md 的 `heading_path` 首段是**文档里的一级标题**（不带
+        扩展名），而 `title` 是文件名（带扩展名）。夹具写成 `"推理.md > 推理 > ..."`
+        时首段与文件名逐字相同，那条"要不要折叠这层"的判据永远碰不到真实情形——
+        线上于是多出一层同义节点（学习记录 49）。
+        """
+        mindmap = build_mindmap("推理优化", [source(1, "推理.md", "推理 > PagedAttention")])
 
         document = mindmap["tree"]["children"][0]
         section = document["children"][0]
-        leaf = section["children"][0]
         self.assertEqual(mindmap["tree"]["label"], "推理优化")
-        self.assertEqual([document["label"], section["label"], leaf["label"]],
-                         ["推理.md", "推理", "PagedAttention"])
-        self.assertEqual(leaf["sources"], ["S1"])
+        self.assertEqual([document["label"], section["label"]], ["推理.md", "PagedAttention"])
+        self.assertEqual(section["sources"], ["S1"])
 
     def test_chunks_under_the_same_heading_share_one_node(self):
         """一个知识点被几段讲到时该合并成一个节点、编号挂在一起。"""
         mindmap = build_mindmap("推理优化", [
-            source(1, "推理.md", "推理.md > 推理 > PagedAttention"),
-            source(2, "推理.md", "推理.md > 推理 > PagedAttention")])
+            source(1, "推理.md", "推理 > PagedAttention"),
+            source(2, "推理.md", "推理 > PagedAttention")])
 
-        leaf = mindmap["tree"]["children"][0]["children"][0]["children"][0]
+        leaf = mindmap["tree"]["children"][0]["children"][0]
         self.assertEqual(leaf["sources"], ["S1", "S2"])
         self.assertEqual(mindmap["linked_chunks"], 2)
-        # 两个片段走同一条路径 ⇒ 只有「文档 + 推理 + PagedAttention」三个节点
-        self.assertEqual(mindmap["node_count"], 4)
+        # 两个片段走同一条路径 ⇒ 只有「文档 + PagedAttention」两个节点
+        self.assertEqual(mindmap["node_count"], 3)
 
     def test_the_document_title_is_not_duplicated(self):
-        """pdf 的 heading_path 是 `标题 > 第 N 页`，不能出现"标题 > 标题"。"""
-        mindmap = build_mindmap("主题", [source(1, "论文.pdf", "论文.pdf > 第 3 页")])
+        """两种真实形状都不能出现"标题 > 标题"。
+
+        pdf 的 heading_path 首段直接就是文件名；无 H1 的 md 也是（`markdown_chunks`
+        在没有一级标题时拿文件名兜底）。两种情况首段与 `title` 都可能逐字相同或只差
+        一个扩展名，判据必须都能命中。
+        """
+        for title, path, expected in (
+                ("论文.pdf", "论文.pdf > 第 3 页", "第 3 页"),
+                ("无标题.md", "无标题.md > 甲", "甲"),
+                ("推理.md", "推理 > PagedAttention", "PagedAttention"),
+                ("笔记.md", "笔记.markdown > 乙", "乙")):
+            with self.subTest(title=title, path=path):
+                mindmap = build_mindmap("主题", [source(1, title, path)])
+                document = mindmap["tree"]["children"][0]
+                self.assertEqual(document["label"], title)
+                self.assertEqual([child["label"] for child in document["children"]], [expected])
+
+    def test_a_document_heading_that_differs_from_the_file_name_is_kept(self):
+        """文档里的一级标题与文件名不同名时**不能折叠**：那是两个不同的信息，
+        折叠等于把文档自己的标题丢掉。"""
+        mindmap = build_mindmap("主题", [source(1, "note1.md", "检索与融合 > 融合")])
 
         document = mindmap["tree"]["children"][0]
-        self.assertEqual(document["label"], "论文.pdf")
-        self.assertEqual([child["label"] for child in document["children"]], ["第 3 页"])
+        self.assertEqual([child["label"] for child in document["children"]], ["检索与融合"])
+        self.assertEqual(document["children"][0]["children"][0]["label"], "融合")
+
+    def test_a_group_node_reports_the_labels_below_it(self):
+        """分组节点自己没有片段，但要能说出"这一组包含哪些编号"。
+
+        界面拿它把"这篇笔记贡献了 S1–S4"标出来。父节点只显示 S1 是骗人的（它下面
+        还有别的），而把每个编号在每一层祖先上重复一遍又太吵——所以只在节点自己
+        没有片段时用它。
+        """
+        mindmap = build_mindmap("主题", [
+            source(1, "a.md", "a.md > 甲"), source(2, "a.md", "a.md > 乙"),
+            source(3, "b.md", "b.md > 丙")])
+
+        root = mindmap["tree"]
+        first = root["children"][0]
+        self.assertEqual(root["aggregate"], ["S1", "S2", "S3"])
+        self.assertEqual(first["aggregate"], ["S1", "S2"])
+        self.assertEqual(first["sources"], [])
+        self.assertEqual(first["children"][0]["aggregate"], ["S1"])
+        # 有自己片段的节点不受影响：aggregate 只做加法，不改 sources 的口径。
+        self.assertEqual(mindmap["linked_chunks"], 3)
 
     def test_every_node_is_supported_by_at_least_one_chunk(self):
         """节点必须有片段支撑：没有编号的中间节点只能是"有子节点的分组"。"""
@@ -138,18 +192,24 @@ class RenderJsonGuideTests(unittest.TestCase):
     """渲染器是纯函数：只换形状，绝不补链——这是 36 号否决"程序补链"后守住的线。"""
 
     def test_renders_headings_and_sentences_with_model_given_sources(self):
+        """每句一个列表项——这是渲染形态的一部分，不是排版偏好。
+
+        句子若渲染成普通行，Markdown 会把连续的行合并成一个段落（软换行渲染成
+        空格），界面上一整篇指南挤成一坨。所以这里钉住 `- `：它同时保证"一行一句"
+        （命中率按行数算，口径不受影响）。实测形态见学习记录 49。
+        """
         content, error = render_json_guide(
             '{"sections": [{"h": "分页"}, {"s": "KV Cache 减少碎片。", "src": [1, 3]},'
             ' {"s": "没有来源的一句。"}]}')
 
         self.assertIsNone(error)
-        self.assertEqual(content, "## 分页\nKV Cache 减少碎片。 [S1][S3]\n没有来源的一句。")
+        self.assertEqual(content, "## 分页\n- KV Cache 减少碎片。 [S1][S3]\n- 没有来源的一句。")
 
     def test_a_markdown_fence_from_prompt_constrained_models_is_stripped(self):
         """DeepSeek 走提示词约束，可能带 ```json 围栏；Ollama 文法约束不会有。"""
         raw = '```json\n{"sections": [{"s": "一句。", "src": [2]}]}\n```'
 
-        self.assertEqual(render_json_guide(raw), ("一句。 [S2]", None))
+        self.assertEqual(render_json_guide(raw), ("- 一句。 [S2]", None))
 
     def test_a_non_integer_source_is_dropped_not_guessed(self):
         """src 里的非整数直接丢掉：渲染器不猜"它大概是 S1"。"""
@@ -157,7 +217,47 @@ class RenderJsonGuideTests(unittest.TestCase):
             '{"sections": [{"s": "一句。", "src": ["1", 2, "x"]}]}')
 
         self.assertIsNone(error)
-        self.assertEqual(content, "一句。 [S2]")
+        self.assertEqual(content, "- 一句。 [S2]")
+
+    def test_repeated_section_keys_are_merged_instead_of_losing_all_but_the_last(self):
+        """实测退化形状：同一个对象里出现多个 `sections` 键（学习记录 49）。
+
+        qwen2.5:7b 在长指南上会这样吐：`{"sections": [第一节], "sections": [第二节], ...}`。
+        标准解析只留最后一个，于是十二句陈述剩两句——**而命中率仍是 100%**（剩下的
+        两句都带来源）。数字对、内容少、界面看不出异常，所以必须按顺序拼回来。
+        """
+        content, error = render_json_guide(
+            '{"sections": [{"h": "融合"}, {"s": "第一句。", "src": [1]}],'
+            ' "sections": [{"h": "重排"}, {"s": "第二句。", "src": [2]}],'
+            ' "sections": [{"h": "评测"}, {"s": "第三句。", "src": [3]}]}')
+
+        self.assertIsNone(error)
+        self.assertEqual(content,
+                         "## 融合\n- 第一句。 [S1]\n## 重排\n- 第二句。 [S2]\n## 评测\n- 第三句。 [S3]")
+
+    def test_several_top_level_objects_are_concatenated(self):
+        """另一种退化：模型收不住，把 JSON 对象一个接一个写下去。"""
+        content, error = render_json_guide(
+            '{"sections": [{"s": "第一句。", "src": [1]}]}\n'
+            '{"sections": [{"s": "第二句。", "src": [2]}]}')
+
+        self.assertIsNone(error)
+        self.assertEqual(content, "- 第一句。 [S1]\n- 第二句。 [S2]")
+
+    def test_a_truncated_tail_keeps_what_was_already_complete(self):
+        """尾部半截（模型写崩或被截断）不该把前面已经拿到的部分一起丢掉。"""
+        content, error = render_json_guide(
+            '{"sections": [{"s": "完整的一句。", "src": [1]}]}{"sections": [{"h": "半')
+
+        self.assertIsNone(error)
+        self.assertEqual(content, "- 完整的一句。 [S1]")
+
+    def test_a_bare_top_level_array_is_still_accepted(self):
+        """提示词约束的模型可能直接给数组，不带 `sections` 外壳。"""
+        content, error = render_json_guide('[{"s": "一句。", "src": [1]}]')
+
+        self.assertIsNone(error)
+        self.assertEqual(content, "- 一句。 [S1]")
 
     def test_invalid_output_reports_a_reason_instead_of_faking_content(self):
         for raw, reason in (("不是 JSON", "json_parse_failed"),
@@ -211,7 +311,7 @@ class StudioServiceTests(unittest.TestCase):
                          ['{"sections": [{"s": "内容到位。", "src": [1]}',
                           ', {"s": "第二句。", "src": [1]}]}'])
         # final 里是**渲染后**的正文：token 是原始 JSON 碎片，用户看到的不是它。
-        self.assertEqual(events[-1]["content"], "内容到位。 [S1]\n第二句。 [S1]")
+        self.assertEqual(events[-1]["content"], "- 内容到位。 [S1]\n- 第二句。 [S1]")
 
     def test_a_stored_guide_recomputes_its_rate_instead_of_storing_it(self):
         """命中率按正文现算：落库的分数会和正文各自演化，而正文才是唯一事实来源。"""
@@ -311,7 +411,7 @@ class StudioServiceTests(unittest.TestCase):
         service.client_factory = lambda settings: Cancelling(1)
         stopped = list(service.stream("分页管理", "guide", cancel_event=cancel))[-1]
         self.assertEqual(stopped["type"], "stopped")
-        self.assertEqual(stopped["content"], "第一句。 [S1]\n第二句。 [S1]")
+        self.assertEqual(stopped["content"], "- 第一句。 [S1]\n- 第二句。 [S1]")
         self.assertEqual(stopped["backlink"]["with_source"], 2)
         self.assertEqual(service.get_artifact(stopped["artifact_id"])["status"], "stopped")
 

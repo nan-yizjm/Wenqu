@@ -65,7 +65,10 @@ GUIDE_SYSTEM_PROMPT = """你是个人知识工作台中的资料整理助手。
 - {"s": "一句陈述", "src": [1]} 表示一句陈述及其来源编号列表。
 规则：每一条陈述事实的句子都是数组里一个独立的 {"s":...} 元素，它的 src 必须给出
 支撑它的片段编号（片段开头的 [S1] 就是编号 1）；一句可以引多个编号，如 "src":[1,3]。
+结构：先用 2 到 4 个 {"h": "小节标题"} 把内容按主题分成几个小节，再把句子放进
+对应小节；每个小节下放 2 到 6 句，同一个句子只能出现在一个地方。
 不要写没有片段支撑的句子——宁可少写一句，也不要补一句没有来源的常识。
+不要写导语或总结，直接从第一个小节标题开始。
 使用清晰、简洁的中文。只输出 JSON，不要输出别的文字。"""
 
 MINDMAP_COVERAGE_NOTE = (
@@ -92,6 +95,34 @@ def _write_text(path, text: str):
     return path
 
 
+class _Sections(list):
+    """模型的 sections 数组，可能由同一个对象里**重复的键**合并而来。
+
+    单独一个子类是为了把它和"顶层本来就是一个 JSON 数组"区分开：后者（提示词约束
+    的模型可能直接给数组）也算小节来源，而不带 `sections` 键的对象一律不算。
+    """
+
+
+def _gather_sections(pairs):
+    """`object_pairs_hook`：把同一个对象里重复出现的 `sections` 键按顺序合起来。
+
+    实测（学习记录 49）qwen2.5:7b 在长指南上会这样退化：
+
+        {"sections": [{"h": "融合"}, ...], "sections": [{"h": "重排"}, ...], ...}
+
+    标准解析只看得到**最后一个** `sections`，于是十二条陈述剩两条——而命中率仍然
+    是 100%（剩下的两条都带来源），界面上看不出任何异常。这是最坏的一类缺陷：
+    数字对、内容少、没人发现。所以这里按出现顺序拼起来，如实呈现模型想说的话。
+    """
+    merged = _Sections()
+    for key, value in pairs:
+        if key == "sections" and isinstance(value, list):
+            merged.extend(value)
+    if merged or any(key == "sections" for key, _ in pairs):
+        return merged
+    return dict(pairs)
+
+
 def render_json_guide(raw: str) -> tuple[str | None, str | None]:
     """把模型的逐句 JSON 渲染成 Markdown。**src 完全来自模型，程序只换形状。**
 
@@ -99,8 +130,14 @@ def render_json_guide(raw: str) -> tuple[str | None, str | None]:
     不猜来源，模型没给的编号这里也不会出现。解析失败返回 `(None, 原因)`——失败要
     如实报错重试，而不是把原始 JSON 当正文存进去假装成功。
 
-    容错范围：DeepSeek 这类走提示词约束的模型可能给 ```json 围栏或前后缀文字，
-    先剥围栏再解析；Ollama 走文法约束（format=json）不需要这些。
+    **每句渲染成一个列表项，不是一行普通文字。** 一行普通文字之间只隔一个换行时，
+    Markdown 把它们当成同一个段落（软换行渲染成空格）——实测八个句子的指南在界面上
+    挤成一大坨，中间还夹着八个引用按钮。列表项天然一行一条，不存在这个问题；同时
+    **仍然保持"一行一句"**，所以 `backlink_report` 数的还是句子数，口径没变。
+
+    容错范围：模型的坏形状一律接住并如实渲染——重复的 `sections` 键、多个并列的顶层
+    对象、顶层直接是数组、```json 围栏。**接住不等于猜**：这里只做"把模型已经写出来
+    的东西拼回去"，不补任何一句、不补任何一个编号。
     """
     text = raw.strip()
     if text.startswith("```"):
@@ -108,13 +145,34 @@ def render_json_guide(raw: str) -> tuple[str | None, str | None]:
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as error:
-        return None, f"json_parse_failed: {error}"
-    sections = data.get("sections") if isinstance(data, dict) else data
-    if not isinstance(sections, list):
+
+    decoder = json.JSONDecoder(object_pairs_hook=_gather_sections)
+    chunks, index, failure = [], 0, None
+    while index < len(text):
+        while index < len(text) and text[index] in " \t\r\n,":
+            index += 1
+        if index >= len(text):
+            break
+        try:
+            chunk, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError as error:
+            # 第一段就解析不了才是"这不是 JSON"；后面接不上的（例如模型收尾时多写了
+            # 半句话）不影响已经拿到的部分。
+            if not chunks:
+                failure = error
+            break
+        chunks.append(chunk)
+    if failure is not None or not chunks:
+        return None, f"json_parse_failed: {failure or '没有可解析的 JSON'}"
+
+    sections, saw_sections = [], False
+    for chunk in chunks:
+        if isinstance(chunk, (_Sections, list)):
+            sections.extend(chunk)
+            saw_sections = True
+    if not saw_sections:
         return None, "json_shape_failed"
+
     lines = []
     for item in sections:
         if not isinstance(item, dict):
@@ -123,7 +181,7 @@ def render_json_guide(raw: str) -> tuple[str | None, str | None]:
             lines.append(f"## {item['h']}")
         elif item.get("s"):
             marks = "".join(f"[S{n}]" for n in item.get("src", []) if isinstance(n, int))
-            lines.append(f"{item['s']} {marks}".rstrip())
+            lines.append(f"- {item['s']} {marks}".rstrip())
     if not lines:
         return None, "json_empty"
     return "\n".join(lines), None
@@ -142,6 +200,15 @@ def guide_messages(topic: str, results) -> list[dict[str, str]]:
         {"role": "user", "content":
             f"主题：{topic}\n\n资料片段：\n{_evidence(results)[:EVIDENCE_CHAR_LIMIT]}"},
     ]
+
+
+_LIST_PREFIX = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+
+
+def _display_text(line: str) -> str:
+    """去掉列表标记再展示。判定仍然用原行——这里只影响"缺来源"清单里显示的文本，
+    列表项前面挂着的 `- ` 是给人看的噪声，用户要读的是那句话本身。"""
+    return _LIST_PREFIX.sub("", line, count=1).strip()
 
 
 def _assertion_lines(content: str) -> list[tuple[int, str]]:
@@ -184,7 +251,7 @@ def backlink_report(content: str, labels) -> dict:
         valid = [f"S{value}" for value in found if f"S{value}" in known]
         invalid |= {f"S{value}" for value in found if f"S{value}" not in known}
         if not valid:
-            missing.append({"line": number, "text": line[:120]})
+            missing.append({"line": number, "text": _display_text(line)[:120]})
             continue
         with_source += 1
         cited.extend(valid)
@@ -209,6 +276,20 @@ def _safe_label(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()[:60] or "未命名"
 
 
+_EXTENSION = re.compile(r"\.(md|markdown|txt|pdf|html?|docx?)$", re.IGNORECASE)
+
+
+def _same_title(left: str, right: str) -> bool:
+    """两个标题是不是同一件事——**忽略扩展名**再比。
+
+    资料名来自文件名（`检索与融合.md`），而 `heading_path` 的首段来自文档里的
+    一级标题（`检索与融合`）：同一个东西，一个带扩展名一个不带。直接字符串相等
+    会判成两件事，树上就多出一层"`检索与融合.md` → `检索与融合`"的同义套娃，
+    真正有用的章节被压到第四层。（实测就是这样，见学习记录 49。）
+    """
+    return _EXTENSION.sub("", left).strip() == _EXTENSION.sub("", right).strip()
+
+
 def build_mindmap(topic: str, results) -> dict:
     """按 `heading_path` 把片段层级拼成一棵树。**不调模型**。
 
@@ -218,6 +299,10 @@ def build_mindmap(topic: str, results) -> dict:
 
     第一层永远是文档标题：按文档分组比按标题平铺更有用（用户想知道"这事在哪几篇
     笔记里出现过"）。没有编号的节点根本不会建出来，因为那意味着它没有片段支撑。
+
+    分组节点（文档层）自己不带片段，所以另给一个 `aggregate`：**它下面所有片段的
+    编号合并**。界面用它把"这篇笔记贡献了 S1–S4"标出来——父节点只显示 `S1` 是骗人
+    的（它下面还有 S2–S4），而把每个编号在所有祖先上重复一遍又太吵。
     """
     root = {"id": "root", "label": topic, "level": 0, "sources": [], "children": []}
     index: dict[tuple, dict] = {}
@@ -225,9 +310,9 @@ def build_mindmap(topic: str, results) -> dict:
         title = item.get("title") or "未命名"
         segments = [part.strip() for part in (item.get("heading_path") or "").split(" > ")
                     if part.strip()]
-        # pdf 的 heading_path 是 `标题 > 第 N 页`：首段与文档标题重复，去掉一层，
-        # 否则树上会出现"标题 > 标题"。
-        if segments and segments[0] == title:
+        # pdf 的 heading_path 是 `标题 > 第 N 页`，md 是 `一级标题 > 二级标题`：
+        # 两种情况的首段都与文档标题重复，去掉一层，否则树上会出现"标题 > 标题"。
+        if segments and _same_title(segments[0], title):
             segments = segments[1:]
         cursor, parent = (), root
         for depth, name in enumerate([title, *segments], 1):
@@ -242,6 +327,17 @@ def build_mindmap(topic: str, results) -> dict:
         label = f"S{number}"
         if label not in parent["sources"]:
             parent["sources"].append(label)
+
+    def collect(node: dict) -> list[str]:
+        total = list(node["sources"])
+        for child in node["children"]:
+            for label in collect(child):
+                if label not in total:
+                    total.append(label)
+        node["aggregate"] = sorted(total, key=_label_order)
+        return node["aggregate"]
+
+    collect(root)
     return {
         "topic": topic,
         "tree": root,
