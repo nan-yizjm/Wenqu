@@ -6,14 +6,32 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+from src.llm import OllamaBusy
 from src.product.app import create_product_app
 from src.product.chat import (BYTES_PER_TOKEN, EVIDENCE_CHUNKS, OLLAMA_CONTEXT_TOKENS,
                               OUTPUT_RESERVE_TOKENS, PROMPT_OVERHEAD_TOKENS,
                               default_chat_client, evidence_budget_bytes,
-                              evidence_reduction_note, fit_evidence)
+                              evidence_reduction_note, fit_evidence, safe_error)
 from src.product.credentials import MemoryCredentialStore
 from src.product.paths import ProductPaths
 from src.product.retrieval_model import MemoryRetrievalModelManager
+
+
+class SafeErrorTests(unittest.TestCase):
+    """问答页与产出页显示同一句话的出处。忙碌与断连是两回事，必须分开说。"""
+
+    def test_an_ollama_busy_timeout_passes_the_reason_through(self):
+        code, message = safe_error(OllamaBusy(
+            "本机 Ollama 在 120 秒内没有返回数据：它可能正被其他任务占用。"))
+        self.assertEqual(code, "ollama_busy")
+        self.assertIn("没有返回", message)
+        self.assertNotIn("请确认服务已启动", message)
+
+    def test_a_genuine_disconnect_keeps_the_old_code_and_wording(self):
+        code, message = safe_error(RuntimeError(
+            "无法连接到 Ollama。请确认 Ollama 已安装并正在运行。"))
+        self.assertEqual(code, "ollama_unavailable")
+        self.assertIn("请确认", message)
 
 
 class FakeStreamingClient:

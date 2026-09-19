@@ -7,7 +7,7 @@ import re
 import threading
 import uuid
 
-from ..llm import DeepSeekClient, OllamaClient
+from ..llm import DeepSeekClient, OllamaBusy, OllamaClient
 from ..query_guard import static_corpus_rejection_reason
 from .database import Database, utc_now
 from .memory import MemoryItem, MemoryProvider, NullMemoryProvider
@@ -180,6 +180,11 @@ def safe_error(error):
     text = str(error)
     if text == "deepseek_not_configured":
         return "deepseek_not_configured", "尚未配置 DeepSeek API Key，请前往设置。"
+    # 忙碌与断连必须分开说：排队超时让人去"确认服务已启动"是在指向一个没坏的
+    # 服务（41 号的双实例实证）。OllamaBusy 的消息本身就是给用户看的完整话，
+    # 这里原样透传。
+    if isinstance(error, OllamaBusy):
+        return "ollama_busy", str(error)
     if "Ollama" in text:
         return "ollama_unavailable", "无法使用本机 Ollama，请确认服务已启动且模型已下载。"
     return "generation_failed", "生成暂时失败，请检查模型设置后重试。"

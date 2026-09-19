@@ -37,6 +37,13 @@ JSON_MODE_NUM_PREDICT = 3072
 JSON_MODE_TEMPERATURE = 0.8
 
 
+class OllamaBusy(RuntimeError):
+    """本机 Ollama 在超时窗口内没有返回数据。与"连不上"是两回事：服务可能运行
+    正常、模型也已加载，只是正被别的请求占用——双实例并发、或一条长生成还在跑
+    （学习记录 41 的实证：第二个实例排队 120 秒失败，报的却是"无法连接"）。
+    safe_error 靠这个类型给出如实的话，而不是让人去检查根本没坏的服务。"""
+
+
 class OllamaClient:
     """通过 Ollama 本地 HTTP API 调用模型。"""
 
@@ -56,6 +63,13 @@ class OllamaClient:
         # JSON"），模型物理上写不出非法 JSON。逐句 JSON 产出依赖这一层。
         self.json_mode = json_mode
         self.last_metrics: dict = {}
+
+    def _busy(self) -> OllamaBusy:
+        """"连得上但没数据"的统一话术：说观察到的事实与最可能的原因，不让人去
+        检查一个根本没坏的服务。"""
+        return OllamaBusy(
+            f"本机 Ollama 在 {self.timeout} 秒内没有返回数据：它可能正被其他任务占用"
+            "（比如另一个工作台窗口正在生成长内容）。等它空闲后重试。")
 
     def chat(self, messages: list[dict[str, str]]) -> str:
         """发送对话消息，并返回模型生成的纯文本回答。"""
@@ -91,9 +105,15 @@ class OllamaClient:
                 f"Ollama 请求失败，HTTP 状态码：{error.code}，详情：{detail}"
             ) from error
         except URLError as error:
+            # urllib 在等待响应头阶段的读超时会把它包成 URLError(TimeoutError)——
+            # 那是"连上了但没数据"（排队/占用），不是"连不上"。
+            if isinstance(error.reason, TimeoutError):
+                raise self._busy() from error
             raise RuntimeError(
                 "无法连接到 Ollama。请确认 Ollama 已安装并正在运行。"
             ) from error
+        except TimeoutError as error:
+            raise self._busy() from error
 
         content = result.get("message", {}).get("content")
         if not isinstance(content, str) or not content.strip():
@@ -143,7 +163,12 @@ class OllamaClient:
             detail = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Ollama 请求失败，HTTP 状态码：{error.code}，详情：{detail}") from error
         except URLError as error:
+            if isinstance(error.reason, TimeoutError):
+                raise self._busy() from error
             raise RuntimeError("无法连接到 Ollama。请确认 Ollama 已安装并正在运行。") from error
+        except TimeoutError as error:
+            # 行间停滞的读超时是裸 TimeoutError，不经 urllib 包装。
+            raise self._busy() from error
         if final_payload:
             self.last_metrics = ollama_metrics(
                 final_payload, (time.perf_counter() - started) * 1000)
