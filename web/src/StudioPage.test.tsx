@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   Artifact, ArtifactStreamEvent, ArtifactSummary, InfographicExport, Mindmap,
@@ -22,9 +22,10 @@ const summary: ArtifactSummary = {
 
 const mindmap: Mindmap = {
   topic: 'KV Cache',
-  tree: { id: 'root', label: 'KV Cache', level: 0, sources: [], children: [
-    { id: 'n0', label: '推理.md', level: 1, sources: [], children: [
-      { id: 'n1', label: 'PagedAttention', level: 2, sources: ['S1', 'S2'], children: [] },
+  tree: { id: 'root', label: 'KV Cache', level: 0, sources: [], aggregate: ['S1', 'S2'], children: [
+    { id: 'n0', label: '推理.md', level: 1, sources: [], aggregate: ['S1', 'S2'], children: [
+      { id: 'n1', label: 'PagedAttention', level: 2, sources: ['S1', 'S2'],
+        aggregate: ['S1', 'S2'], children: [] },
     ] },
   ] },
   node_count: 3, linked_chunks: 2,
@@ -206,8 +207,10 @@ describe('StudioPage mindmap', () => {
     expect(await screen.findByTestId('mindmap-view')).toBeInTheDocument()
     expect(screen.getByText('PagedAttention')).toBeInTheDocument()
     expect(screen.getByText('推理.md')).toBeInTheDocument()
-    // 节点的编号是可点的，点了要能打开原文片段
-    fireEvent.click(screen.getByRole('button', { name: 'S1' }))
+    // 节点的编号是可点的，点了要能打开原文片段。同一批编号在分组层也会出现
+    // （那一层自己没有片段），所以定位到章节节点上的那一个。
+    const leafLine = screen.getByText('PagedAttention').closest('.mindmap-line') as HTMLElement
+    fireEvent.click(within(leafLine).getByRole('button', { name: 'S1' }))
     await waitFor(() => expect(mocks.source).toHaveBeenCalled())
   })
 
@@ -233,6 +236,27 @@ describe('StudioPage mindmap', () => {
 
     expect(await screen.findByText('本工作台不渲染 Mermaid，只提供可复制的文本。'))
       .toBeInTheDocument()
+  })
+
+  it('shows what a grouping node contains even though it owns no chunk', async () => {
+    await generate([
+      { type: 'retrieval', artifact_id: 'art_2', sources: [source] },
+      { type: 'final', artifact_id: 'art_2', status: 'complete', content: mindmap.mermaid,
+        sources: [source], mindmap },
+    ], 'KV Cache', 'mindmap')
+
+    expect(await screen.findByTestId('mindmap-view')).toBeInTheDocument()
+    // 文档那一层自己没有片段（片段挂在更深的章节节点上），但"这一组用到了什么"要能看见：
+    // 否则用户在这一层读到的是空白，而它恰恰是整篇笔记的入口。
+    const documentLine = screen.getByText('推理.md').closest('.mindmap-line') as HTMLElement
+    const grouped = documentLine.querySelectorAll('.mindmap-chips.grouped > *')
+    expect(grouped.length).toBe(2)
+    // 编号仍然可点：分组层的编号和章节层的编号是同一批，行为一致。
+    expect(grouped[0].tagName).toBe('BUTTON')
+
+    // 自己有片段的节点不重复显示聚合编号——否则同一批编号会在每一层祖先上重复一遍。
+    const leafLine = screen.getByText('PagedAttention').closest('.mindmap-line') as HTMLElement
+    expect(leafLine.querySelector('.mindmap-chips')?.classList.contains('grouped')).toBe(false)
   })
 })
 

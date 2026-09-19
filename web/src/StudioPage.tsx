@@ -66,11 +66,15 @@ function MindmapBranch({ node, byLabel, open }: {
   byLabel: Map<string, MessageSource>
   open: (source: MessageSource) => void
 }) {
-  return <li className="mindmap-node" data-testid="mindmap-node">
+  // 分组节点（文档那一层）自己没有片段，改显示**它下面所有片段的编号**——只显示
+  // 自己的 sources 会让"这篇笔记用到了什么"看起来是空的，而它恰恰是这一组的入口。
+  const grouped = node.sources.length === 0
+  const chips = grouped ? (node.aggregate ?? []) : node.sources
+  return <li className={`mindmap-node level-${node.level}`} data-testid="mindmap-node">
     <div className="mindmap-line">
       <span className="mindmap-label">{node.label}</span>
-      {node.sources.length > 0 && <span className="mindmap-chips">
-        {node.sources.map(label => {
+      {chips.length > 0 && <span className={`mindmap-chips${grouped ? ' grouped' : ''}`}>
+        {chips.map(label => {
           const hit = byLabel.get(label)
           return hit
             ? <button key={label} className="citation" title={`${hit.title} · ${hit.heading_path}`}

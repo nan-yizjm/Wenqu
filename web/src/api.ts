@@ -139,6 +139,12 @@ export type MindmapNode = {
   label: string
   level: number
   sources: string[]
+  /**
+   * 这个节点**下面所有片段**的编号（含自身）。分组节点自己没有片段，显示它才知道
+   * "这一组包含什么"——只显示父节点自己的 `sources` 会漏掉更深处的编号。
+   * 可选：这份体例是后加的，此前生成的产出里没有这个字段。
+   */
+  aggregate?: string[]
   children: MindmapNode[]
 }
 /**
