@@ -106,6 +106,9 @@ export type ResourcesIndex = { docs: BundledResource[]; examples: BundledResourc
 export type BatchSkip = { id: string; label: string | null; code: 'not_found' | 'busy'; reason: string }
 export type BatchResult = { deleted: number; skipped: BatchSkip[]; files_removed?: number }
 
+/** 退出时还在跑的任务清单。uvicorn 要等它们结束才真正退出，界面靠它说"在等什么"。 */
+export type WaitingCounts = { imports: number; answers: number; artifacts: number }
+
 // ---------------------------------------------------------------------------
 // Studio 产出
 // ---------------------------------------------------------------------------
@@ -465,8 +468,10 @@ export const api = {
   restore: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ restored: boolean; restart_required: boolean }>(
     '/api/v1/system/restore', { method: 'POST', body }) },
   diagnosticExportUrl: () => '/api/v1/system/diagnostics/export',
-  shutdown: () => request<{ status: string; message: string }>(
+  shutdown: () => request<{ status: string; message: string; waiting: WaitingCounts }>(
     '/api/v1/system/shutdown', { method: 'POST' }),
+  /** 退出等待期轮询这个：请求开始**失败**（连接拒绝）才说明服务真的死了。 */
+  health: () => request<{ status: string }>('/api/v1/health'),
   restoreMigration: (backupName: string) => request<{ restored: boolean; restart_required: boolean }>(
     '/api/v1/system/recovery/restore', { method: 'POST', body: JSON.stringify({ backup_name: backupName }) }),
 }

@@ -3,14 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ExitControl, SignedOff } from './ExitControl'
 
 const shutdown = vi.fn()
+const health = vi.fn()
 
 vi.mock('./api', () => ({
-  api: { shutdown: () => shutdown() },
+  api: { shutdown: () => shutdown(), health: () => health() },
 }))
 
 beforeEach(() => {
   shutdown.mockReset()
-  shutdown.mockResolvedValue({ status: 'shutting_down', message: '本地服务正在退出。' })
+  health.mockReset()
+  shutdown.mockResolvedValue({ status: 'shutting_down', message: '本地服务正在退出。', waiting: { imports: 0, answers: 0, artifacts: 0 } })
+  // 默认"服务已死"：health 一问就失败，onExit 才会（真实地）被触发。
+  health.mockRejectedValue(new Error('连接拒绝'))
 })
 
 describe('ExitControl', () => {
@@ -81,6 +85,40 @@ describe('ExitControl', () => {
     await waitFor(() => expect(screen.getByTestId('exit-failure')).toBeTruthy())
 
     fireEvent.click(screen.getByTestId('exit-confirm-button'))
+    await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1))
+  })
+
+  it('shows what it is waiting for while tasks are still running', async () => {
+    // uvicorn 要等在跑的流结束才真正退出：把后端报来的任务数原样显示，
+    // 让"为什么还没退"看得见。health 先活着（还在等）、后死亡（退出了）。
+    shutdown.mockResolvedValue({
+      status: 'shutting_down', message: '本地服务正在退出。',
+      waiting: { imports: 1, answers: 0, artifacts: 2 } })
+    health.mockResolvedValueOnce({ status: 'ready' })
+    const onExit = vi.fn()
+    render(<ExitControl onExit={onExit} />)
+
+    fireEvent.click(screen.getByTestId('exit-open'))
+    fireEvent.click(screen.getByTestId('exit-confirm-button'))
+
+    const note = await screen.findByTestId('exit-waiting')
+    expect(note.textContent).toContain('3 个进行中的任务')
+    expect(note.textContent).toContain('产出 2')
+    expect(onExit).not.toHaveBeenCalled()
+
+    health.mockRejectedValue(new Error('连接拒绝'))
+    // 第二次轮询在 health 成功 1 秒之后才跑——waitFor 默认 1 秒会临界超时。
+    await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1), { timeout: 4000 })
+  })
+
+  it('quits once the health poll fails, even with nothing pending', async () => {
+    const onExit = vi.fn()
+    render(<ExitControl onExit={onExit} />)
+
+    fireEvent.click(screen.getByTestId('exit-open'))
+    fireEvent.click(screen.getByTestId('exit-confirm-button'))
+
+    expect(await screen.findByTestId('exit-waiting')).toBeTruthy()
     await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1))
   })
 })

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import type { WaitingCounts } from './api'
 
 /**
  * 退出入口。
@@ -14,17 +15,37 @@ import { api } from './api'
  *
  * 退出失败时**不显示"已退出"**：后端在没有接启动器时会回 503，此时界面要如实说
  * 停不了，而不是让用户以为服务没了。
+ *
+ * `shutting_down` 也不等于"已退出"：uvicorn 会先等在跑的流（回答/产出/导入）结束
+ * 才真正退出，这期间进程还活着。所以发出退出请求后轮询 health——**请求开始失败**
+ * （连接拒绝）才说明服务真的没了，那时才显示"已退出"。等待期间把后端报来的
+ * 任务数原样显示，让人知道"为什么还没退"。
  */
 export function ExitControl({ onExit, compact = false }: { onExit: () => void; compact?: boolean }) {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState('')
+  const [waiting, setWaiting] = useState<WaitingCounts | null>(null)
+  const pollTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(pollTimer.current), [])
+
+  const watchExit = async () => {
+    try {
+      await api.health()
+      // 服务还活着（在等任务结束）：一秒后再看。
+      pollTimer.current = window.setTimeout(() => void watchExit(), 1000)
+    } catch {
+      // health 开始失败 = 端口没了 = 服务真的退出了。这时"已退出"才是真话。
+      onExit()
+    }
+  }
 
   const quit = async () => {
     setBusy(true); setFailure('')
     try {
-      await api.shutdown()
-      onExit()
+      const result = await api.shutdown()
+      setWaiting(result.waiting)
+      pollTimer.current = window.setTimeout(() => void watchExit(), 500)
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : '没能让本地服务退出。')
       setBusy(false)
@@ -32,6 +53,7 @@ export function ExitControl({ onExit, compact = false }: { onExit: () => void; c
   }
 
   if (confirming) {
+    const pending = waiting ? waiting.imports + waiting.answers + waiting.artifacts : 0
     return <div className={`exit-control confirming${compact ? ' compact' : ''}`} data-testid="exit-confirm">
       <p className="exit-question" data-testid="exit-question">
         确认退出？本地服务会停止，这个标签页可以关掉；资料、索引和会话都留在原处。
@@ -42,6 +64,11 @@ export function ExitControl({ onExit, compact = false }: { onExit: () => void; c
         <button className="ghost" disabled={busy} onClick={() => setConfirming(false)}
           data-testid="exit-cancel-button">取消</button>
       </div>
+      {busy && waiting && <p className="hint" data-testid="exit-waiting">
+        {pending > 0
+          ? `正在等待 ${pending} 个进行中的任务完成（导入 ${waiting.imports}、回答 ${waiting.answers}、产出 ${waiting.artifacts}），完成后自动退出。`
+          : '正在等待本地服务停止…'}
+      </p>}
       {failure && <p className="error" data-testid="exit-failure">{failure}</p>}
     </div>
   }
@@ -59,9 +86,10 @@ export function ExitControl({ onExit, compact = false }: { onExit: () => void; c
 
 /** 退出之后的收尾页。
  *
- * 服务已经停了，这一页**不能再发任何请求**——所以它不显示实时状态，只交代两件事：
- * 东西都还在，以及下次怎么回来。继续留在原来的界面上只会让每个请求都失败，
- * 看起来像产品坏了。
+ * 服务已经停了——"已经停了"由 ExitControl 的 health 轮询背书：这一页只在
+ * health 请求开始失败（端口没了）之后才出现，所以这句话是真话。这一页**不能再发
+ * 任何请求**——它不显示实时状态，只交代两件事：东西都还在，以及下次怎么回来。
+ * 继续留在原来的界面上只会让每个请求都失败，看起来像产品坏了。
  */
 export function SignedOff() {
   return <main className="signed-off" data-testid="signed-off">
