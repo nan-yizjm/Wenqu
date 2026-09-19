@@ -263,14 +263,17 @@ export function StudioPage() {
         }
         else if (event.type === 'token') setDraft(previous => previous + (event.text ?? ''))
         else if (event.type === 'final' || event.type === 'stopped') {
-          // 指南的正文以 final 为准（停止时也会带回已写出的部分），token 只是过程。
-          if (event.content !== undefined && event.type === 'final') setDraft(event.content)
+          // 正文以服务端回传为准：final 是渲染后的逐句正文，停止时带回能渲染的部分
+          //（渲染不出就回原始 JSON）。token 是原始 JSON 碎片，只是过程产物，不能
+          // 直接当正文留着——否则停止后界面残留半截 JSON。
+          if (event.content !== undefined) setDraft(event.content)
           setLiveStatus(event.status ?? 'complete')
           if (event.sources) setLiveSources(event.sources)
           if (event.backlink) setLiveReport(event.backlink)
           if (event.mindmap) setLiveMindmap(event.mindmap)
           if (event.message) setLiveNotice(event.message)
         } else if (event.type === 'error') {
+          if (event.content !== undefined) setDraft(event.content)
           setLiveStatus('failed')
           setLiveNotice(event.message || '生成失败。')
         }
@@ -380,7 +383,12 @@ export function StudioPage() {
           : <section className="card studio-draft">
               <h3>{KINDS.find(entry => entry.id === kind)?.label}</h3>
               {draft
-                ? <AnswerMarkdown content={draft} sources={liveSources} open={setSource} />
+                ? (liveStatus === 'running'
+                  // 逐句 JSON 的过程产物是原始碎片，渲染出来就是闪动的半截 JSON——
+                  // 过程只报收到的字数，正文等渲染完成再显示。
+                  ? <p className="hint" data-testid="live-progress">
+                      正在逐句整理资料…（已收到 {draft.length} 字）</p>
+                  : <AnswerMarkdown content={draft} sources={liveSources} open={setSource} />)
                 : <p className="hint">正在等待模型输出…</p>}
             </section>}
         {liveEvidenceNote && <p className="hint" data-testid="live-evidence-note">{liveEvidenceNote}</p>}

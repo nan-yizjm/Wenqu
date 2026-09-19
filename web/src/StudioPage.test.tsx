@@ -430,6 +430,51 @@ describe('StudioPage 的证据裁剪说明', () => {
   })
 })
 
+describe('StudioPage 的逐句 JSON 过程显示', () => {
+  it('生成中显示进度提示，不把原始 JSON 碎片当正文渲染', async () => {
+    // token 是原始 JSON 碎片：过程直接渲染会闪出半截 JSON，过程只报收到的字数，
+    // 正文等 final 渲染完成再显示。
+    const fragment = '{"sections": [{"s": "第一句。", "src": [1]}'
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => { release = resolve })
+    mocks.stream.mockImplementation(async (_topic: string, _kind: string,
+      onEvent: (event: Event) => void) => {
+      onEvent({ type: 'retrieval', artifact_id: 'art_1', sources: [source] })
+      onEvent({ type: 'token', artifact_id: 'art_1', text: fragment })
+      await gate
+      onEvent({ type: 'final', artifact_id: 'art_1', status: 'complete',
+        content: '第一句。 [S1]', sources: [source],
+        backlink: report({ assertions: 1, with_source: 1, hit_rate: 1,
+          missing_count: 0, missing: [] }) })
+    })
+    render(<StudioPage />)
+    fireEvent.change(screen.getByLabelText('主题'), { target: { value: 'KV Cache' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始生成' }))
+
+    expect(await screen.findByTestId('live-progress')).toHaveTextContent(
+      `已收到 ${fragment.length} 字`)
+    expect(screen.queryByText(/第一句/)).not.toBeInTheDocument()
+
+    release()
+    expect(await screen.findByText(/第一句/)).toBeInTheDocument()
+    expect(screen.queryByTestId('live-progress')).not.toBeInTheDocument()
+  })
+
+  it('停止后正文以服务端回传为准，不再残留原始 JSON 碎片', async () => {
+    await generate([
+      { type: 'retrieval', artifact_id: 'art_1', sources: [source] },
+      { type: 'token', artifact_id: 'art_1', text: '{"sections": [{"s": "第一句。", "src": [1]}' },
+      { type: 'stopped', artifact_id: 'art_1', status: 'stopped',
+        content: '第一句。 [S1]', sources: [source],
+        backlink: report({ assertions: 1, with_source: 1, hit_rate: 1,
+          missing_count: 0, missing: [] }) },
+    ])
+
+    expect(await screen.findByText(/第一句/)).toBeInTheDocument()
+    expect(screen.queryByText(/"sections"/)).not.toBeInTheDocument()
+  })
+})
+
 describe('StudioPage 的批量删除', () => {
   it('选择模式里勾选历史产出，确认文案说明「正在生成会跳过」', async () => {
     mocks.removeBatch.mockResolvedValue({ deleted: 1, skipped: [], files_removed: 1 })
