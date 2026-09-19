@@ -178,5 +178,54 @@ class ShutdownTests(unittest.TestCase):
                 {"imports": 1, "answers": 1, "artifacts": 1})
 
 
+class RestartTests(unittest.TestCase):
+    """重启替代"恢复完成后再自己点一次图标"。
+
+    它和退出守同一条线：没有启动器时**如实说做不到**，因为报成功会让页面一直等一个
+    不会回来的服务。另一条关键是可达性——恢复备份之后应用处在"待重启"状态，那时的
+    重启请求必须能发出去，否则唯一该做的事被自己的中间件拦住。
+    """
+
+    def build(self, **kwargs):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = ProductPaths(Path(temporary.name) / "产品数据")
+        return create_product_app(
+            paths, MemoryCredentialStore(), retrieval_model_manager=MemoryRetrievalModelManager(),
+            material_run_inline=True, chat_client_factory=lambda _settings: AnswerClient(), **kwargs)
+
+    def test_an_instance_without_a_launcher_says_it_cannot_restart(self):
+        with TestClient(self.build(), base_url="http://127.0.0.1:8765") as client:
+            response = client.post("/api/v1/system/restart")
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["error"], "restart_unavailable")
+            self.assertIn("启动器", response.json()["message"])
+
+    def test_a_launcher_backed_instance_restarts_without_losing_anything(self):
+        calls = []
+        with TestClient(self.build(restart_callback=lambda: calls.append(1)),
+                        base_url="http://127.0.0.1:8765") as client:
+            response = client.post("/api/v1/system/restart")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "restarting")
+            self.assertEqual(len(calls), 1)
+            # 重启不是删数据，这句话必须由接口说出来。
+            self.assertIn("资料", response.json()["message"])
+
+    def test_restart_is_reachable_while_a_restore_is_pending(self):
+        """恢复备份之后应用只放行少数几个入口——重启必须是其中之一。
+
+        这不是顺手加的白名单条目：用户恢复完备份，下一步该做的就是重启，
+        被自己的中间件拦成 409 会让这条路彻底走不通。
+        """
+        with TestClient(self.build(restart_callback=lambda: None),
+                        base_url="http://127.0.0.1:8765") as client:
+            client.app.state.restore_pending = True
+
+            self.assertEqual(client.get("/api/v1/conversations").status_code, 409)
+            self.assertEqual(client.post("/api/v1/system/restart").status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

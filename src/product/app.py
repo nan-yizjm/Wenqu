@@ -17,7 +17,7 @@ from starlette.concurrency import iterate_in_threadpool
 
 from . import PRODUCT_NAME, PRODUCT_VERSION
 from .credentials import CredentialStore
-from .database import Database
+from .database import Database, utc_now
 from .paths import ProductPaths, bundle_root
 from .retrieval_model import RetrievalModelManager, build_cpu_encoder
 from .materials import (
@@ -282,6 +282,7 @@ def web_state(chat, settings: dict) -> dict:
 
 def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                        static_dir: Path | None = None, shutdown_callback=None,
+                       restart_callback=None,
                        retrieval_model_manager=None, material_run_inline=False,
                        chat_client_factory=None, material_encoder_factory=None,
                        memory_provider_factory=None, search_provider_factory=None):
@@ -302,6 +303,9 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
     @asynccontextmanager
     async def lifespan(app):
         app.state.database = Database(paths)
+        # 这个实例是什么时候起来的。重启窗口实测只有一秒上下——前端靠"轮询撞到断连"
+        # 判断重启完成会漏掉，所以判据换成它：值变了就是新实例。
+        app.state.started_at = utc_now()
         app.state.paths = paths
         app.state.credentials = credentials
         app.state.retrieval_model = model_manager
@@ -349,7 +353,8 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         if origin and not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
             return JSONResponse({"error": "local_origin_required"}, status_code=403)
         if (getattr(request.app.state, "restore_pending", False)
-                and request.url.path not in {"/api/v1/health", "/api/v1/system/shutdown"}):
+                and request.url.path not in {"/api/v1/health", "/api/v1/system/shutdown",
+                                             "/api/v1/system/restart"}):
             return JSONResponse({"error": "restart_required",
                                  "message": "数据已恢复，请退出并重新打开知识工作台。"},
                                 status_code=409)
@@ -358,7 +363,10 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                 and request.url.path not in {"/api/v1/health", "/api/v1/setup",
                                              "/api/v1/system/recovery",
                                              "/api/v1/system/recovery/restore",
-                                             "/api/v1/system/shutdown"}):
+                                             "/api/v1/system/shutdown",
+                                             # 迁移失败 → 恢复 → 重启是主场景，restart
+                                             # 必须能在恢复待重状态下发得出去。
+                                             "/api/v1/system/restart"}):
             return JSONResponse({"error": "database_recovery_required",
                                  "message": "数据库升级失败，请先从迁移备份恢复。"},
                                 status_code=503)
@@ -382,6 +390,9 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             "status": "recovery_required" if database.migration_error else "ready",
             "version": PRODUCT_VERSION,
             "database_schema": schema_version,
+            # 实例启动时刻：重启前后取一次、比值就知道"是不是新实例"，不依赖
+            # 能否恰好撞上那段很短的断连窗口。
+            "started_at": getattr(request.app.state, "started_at", None),
             "runtime": request.app.state.runtime_state,
             "restart_required": request.app.state.restore_pending,
         }
@@ -957,6 +968,23 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                                 status_code=422)
         finally:
             await file.close()
+
+    @app.post("/api/v1/system/restart")
+    async def restart():
+        """重启本地服务：不删数据、不换端口、不再开浏览器。
+
+        存在的意义是替用户省掉"恢复完成后再自己点一次图标"这一步。与退出守同一条线：
+        **没有启动器时如实说做不到**——报成功会让页面一直等一个不会回来的服务。
+        端口固定写进启动器的重启命令里，因为页面等的就是这一个端口。
+        """
+        if not restart_callback:
+            return JSONResponse(
+                {"error": "restart_unavailable",
+                 "message": "这个实例没有连接启动器，无法自行重启；请结束它的进程后重新打开。"},
+                status_code=503)
+        restart_callback()
+        return {"status": "restarting",
+                "message": "本地服务正在重启，完成后页面会自动刷新。资料、索引和会话都会留在原处。"}
 
     @app.post("/api/v1/system/shutdown")
     async def shutdown(request: Request):
