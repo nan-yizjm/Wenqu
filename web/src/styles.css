@@ -302,3 +302,12 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
 .template-text{display:flex;flex-direction:column;gap:2px;min-width:0}
 .template-picker strong{font-size:12px}
 .template-picker small{font-size:10px;line-height:1.45;color:var(--text-muted)}
+
+/* ── 恢复后的「立即重启」 ───────────────────────────────────────────
+   恢复备份后应用处在待重启状态：主按钮一键重启（等服务断过又回来才刷新页面），
+   退出作为备选留在旁边——用户想彻底关掉时不必先重启一次。 */
+.restart-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:14px}
+.restart-row .exit-control{margin-top:0;padding:0}
+.restart-control{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.restart-control .primary{margin-top:0}
+.restart-control .hint,.restart-control .error{margin:0;font-size:11px;line-height:1.5}

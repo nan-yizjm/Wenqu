@@ -5,6 +5,7 @@ import { ChatPage } from './ChatPage'
 import { FavoritesPage } from './FavoritesPage'
 import { StudioPage } from './StudioPage'
 import { ExitControl, SignedOff } from './ExitControl'
+import { RestartControl } from './components/RestartControl'
 import { applyTemplate, applyTheme, TEMPLATE_OPTIONS, THEME_OPTIONS, useResolvedTheme, watchSystemTheme } from './lib/theme'
 
 type Page = 'library' | 'chat' | 'studio' | 'favorites' | 'settings'
@@ -75,7 +76,7 @@ function Settings({ setup, reload, onExit }: {
   const restore = async (file?: File) => {
     if (!file || !window.confirm('恢复会替换当前工作台数据。系统会先自动创建安全备份，是否继续？')) return
     setMessage('正在校验并恢复备份…')
-    try { await api.restore(file); setRestartRequired(true); setMessage('恢复完成，需要退出并重新打开工作台。') }
+    try { await api.restore(file); setRestartRequired(true); setMessage('数据已恢复；重启工作台后生效。') }
     catch (error) { setMessage(error instanceof Error ? error.message : '恢复失败') }
     if (restoreInput.current) restoreInput.current.value = ''
   }
@@ -219,7 +220,11 @@ function Settings({ setup, reload, onExit }: {
         <div className="support-actions"><button className="secondary" onClick={() => void backup()}>下载数据备份</button><button className="secondary" onClick={() => restoreInput.current?.click()}>从备份恢复</button>
           <a className="secondary export-link" href={api.diagnosticExportUrl()}>下载脱敏诊断</a></div>
         <input ref={restoreInput} className="hidden" type="file" accept=".zip" onChange={event => void restore(event.target.files?.[0])} />
-        {restartRequired && <ExitControl onExit={onExit} compact />}</section>
+        {restartRequired && <div className="restart-row">
+          <RestartControl />
+          {/* 重启是一键，退出是备选：两个入口都留着，用户想彻底关掉时不必先重启一次。 */}
+          <ExitControl onExit={onExit} compact />
+        </div>}</section>
     </div>
     <div className="save-bar"><span>{message}</span>{!restartRequired && <button className="primary" onClick={save}>保存设置</button>}</div>
   </div>
@@ -258,14 +263,15 @@ function Recovery({ setup, onExit }: { setup: SetupState; onExit: () => void }) 
   const [message, setMessage] = useState('')
   const restore = async () => {
     if (!selected) return
-    try { await api.restoreMigration(selected); setMessage('恢复完成。请退出后重新打开，系统会再次执行升级。') }
+    try { await api.restoreMigration(selected); setMessage('备份已恢复；重启工作台后会再次执行升级。') }
     catch (error) { setMessage(error instanceof Error ? error.message : '恢复失败') }
   }
   return <main className="recovery-page"><section className="setup-card"><span className="step">安全恢复模式</span><h1>数据库升级没有完成</h1>
     <p>工作台没有继续加载资料或模型，以免扩大损坏。请选择升级前自动备份恢复；当前失败数据库也会另行保留。</p>
     {backups.length ? <><label>可用迁移备份<select value={selected} onChange={event => setSelected(event.target.value)}>{backups.map(item => <option key={item.name} value={item.name}>{item.name} · {Math.ceil(item.size / 1024)} KB</option>)}</select></label>
       <button className="primary wide" onClick={() => void restore()}>恢复所选备份</button></> : <p className="error">没有找到可自动恢复的迁移备份。请保留用户数据目录，并使用脱敏日志寻求帮助。</p>}
-    {message && <p className="status-line">{message}</p>}{message && <ExitControl onExit={onExit} compact />}
+    {message && <p className="status-line">{message}</p>}
+    {message && <div className="restart-row"><RestartControl /><ExitControl onExit={onExit} compact /></div>}
   </section></main>
 }
 

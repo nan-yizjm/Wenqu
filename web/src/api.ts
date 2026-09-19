@@ -472,8 +472,11 @@ export const api = {
   diagnosticExportUrl: () => '/api/v1/system/diagnostics/export',
   shutdown: () => request<{ status: string; message: string; waiting: WaitingCounts }>(
     '/api/v1/system/shutdown', { method: 'POST' }),
+  /** 重启本地服务：不换端口、不删数据。没有启动器时 503（如实说做不到）。 */
+  restart: () => request<{ status: string; message: string }>(
+    '/api/v1/system/restart', { method: 'POST' }),
   /** 退出等待期轮询这个：请求开始**失败**（连接拒绝）才说明服务真的死了。 */
-  health: () => request<{ status: string }>('/api/v1/health'),
+  health: () => request<{ status: string; started_at?: string | null }>('/api/v1/health'),
   restoreMigration: (backupName: string) => request<{ restored: boolean; restart_required: boolean }>(
     '/api/v1/system/recovery/restore', { method: 'POST', body: JSON.stringify({ backup_name: backupName }) }),
 }
