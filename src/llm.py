@@ -23,6 +23,20 @@ def ollama_metrics(payload: dict, wall_ms: float) -> dict:
     result["done_reason"] = payload.get("done_reason")
     return result
 
+# json_mode 的生成 token 硬上限。format=json 的文法约束排除了"格式错了就停"这种
+# 自然停止点：实测（2026-09-19）qwen2.5:7b 会陷入无限复读，64 t/s 连出 5.7 万
+# token 还在靠 context shift 丢旧上下文续命，没有 num_predict 就永不停止。
+# 上限按实验标定：三主题成品最长 1245 字符（34 句），连同 JSON 结构开销约 2000
+# token，取 3072 留余量。顶到上限多半意味着复读，截断的 JSON 会走
+# invalid_model_output 如实失败（重试即可），而不是渲染成半截假正文。
+JSON_MODE_NUM_PREDICT = 3072
+# json_mode 用实验验证过的温度。对照实测（同主题同证据）：产品统一口径 0.2 下
+# "检索评测口径"主题无限复读（3013 token 顶满上限被硬停、如实失败），而 0.8
+# 7.1 秒自然结束、11/11 全带源——实验三主题也全部正常。低温把模型压进复读
+# 环，温度是这条线的参数而不是全局参数：问答仍用 0.2。
+JSON_MODE_TEMPERATURE = 0.8
+
+
 class OllamaClient:
     """通过 Ollama 本地 HTTP API 调用模型。"""
 
@@ -32,11 +46,15 @@ class OllamaClient:
         base_url: str = "http://127.0.0.1:11434",
         timeout: int = 120,
         generation_options: dict | None = None,
+        json_mode: bool = False,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.generation_options = dict(generation_options or {})
+        # Ollama 的 `format: "json"` 用文法约束整个输出（不是提示词层面的"请输出
+        # JSON"），模型物理上写不出非法 JSON。逐句 JSON 产出依赖这一层。
+        self.json_mode = json_mode
         self.last_metrics: dict = {}
 
     def chat(self, messages: list[dict[str, str]]) -> str:
@@ -51,6 +69,10 @@ class OllamaClient:
                 **self.generation_options,
             },
         }
+        if self.json_mode:
+            payload["format"] = "json"
+            payload["options"]["temperature"] = JSON_MODE_TEMPERATURE
+            payload["options"]["num_predict"] = JSON_MODE_NUM_PREDICT
 
         request = Request(
             url=f"{self.base_url}/api/chat",
@@ -91,6 +113,10 @@ class OllamaClient:
             "model": self.model, "messages": messages, "stream": True,
             "options": {"temperature": 0.2, **self.generation_options},
         }
+        if self.json_mode:
+            payload["format"] = "json"
+            payload["options"]["temperature"] = JSON_MODE_TEMPERATURE
+            payload["options"]["num_predict"] = JSON_MODE_NUM_PREDICT
         request = Request(
             url=f"{self.base_url}/api/chat",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

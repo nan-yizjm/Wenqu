@@ -45,20 +45,26 @@ def stored_source(label, title, heading_path, origin="note"):
             "origin": origin}
 
 
-DEFAULT_GUIDE_CHUNKS = ("分页管理 KV Cache [S1]。", "\n显存碎片减少 [S1]。",
-                        "\n这句没有来源。")
+# 模型现在输出**逐句 JSON**（学习记录 44：基线命中率 22.7%、JSON 方案 100%），
+# 假客户端也要吐 JSON——渲染之后与旧版 markdown 等价：三句断言、两句带 [S1]、
+# 一句不带（"命中率 2/3、missing 1"的断言继续成立，量的是同一把尺子）。
+DEFAULT_GUIDE_CHUNKS = ('{"sections": [{"s": "分页管理 KV Cache。", "src": [1]},',
+                        ' {"s": "显存碎片减少。", "src": [1]},',
+                        ' {"s": "这句没有来源。"}]}')
 
 
 class FakeGuideClient:
-    """按 token 吐出一篇指南，用来在没有模型的情况下测量回链。
+    """按 token 吐出一份逐句 JSON 产出，用来在没有模型的情况下测量回链。
 
-    默认三句里有一句不带来源，所以"命中率 2/3"这个断言是真的在被算出来的；
-    传 `chunks=()` 就得到一篇空产出，用来测失败路径。
+    默认三句里有一句没给 src，渲染后就是"一句不带来源"，所以"命中率 2/3"
+    这个断言是真的在被算出来的；传 `chunks=()` 就得到一篇空产出，用来测失败路径。
+    渲染失败的输出会走 `invalid_model_output` 失败路径——那是另一条测试的事。
     """
 
     def __init__(self, captured, chunks=None):
         self.captured = captured
         self.chunks = list(DEFAULT_GUIDE_CHUNKS if chunks is None else chunks)
+        self.json_mode = False
 
     def stream_chat(self, messages, cancel_event=None):
         self.captured.append(messages)

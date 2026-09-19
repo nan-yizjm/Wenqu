@@ -1,8 +1,10 @@
 import json
+import threading
 import unittest
 
 from src.product.chat import OLLAMA_CONTEXT_TOKENS
-from src.product.studio import (STUDIO_EVIDENCE_CHUNKS, backlink_report, build_mindmap)
+from src.product.studio import (STUDIO_EVIDENCE_CHUNKS, backlink_report, build_mindmap,
+                                render_json_guide)
 from tests.product_harness import (build_harness, new_service, source)
 
 
@@ -132,6 +134,42 @@ class MindmapTests(unittest.TestCase):
         self.assertIn("·", mermaid)
 
 
+class RenderJsonGuideTests(unittest.TestCase):
+    """渲染器是纯函数：只换形状，绝不补链——这是 36 号否决"程序补链"后守住的线。"""
+
+    def test_renders_headings_and_sentences_with_model_given_sources(self):
+        content, error = render_json_guide(
+            '{"sections": [{"h": "分页"}, {"s": "KV Cache 减少碎片。", "src": [1, 3]},'
+            ' {"s": "没有来源的一句。"}]}')
+
+        self.assertIsNone(error)
+        self.assertEqual(content, "## 分页\nKV Cache 减少碎片。 [S1][S3]\n没有来源的一句。")
+
+    def test_a_markdown_fence_from_prompt_constrained_models_is_stripped(self):
+        """DeepSeek 走提示词约束，可能带 ```json 围栏；Ollama 文法约束不会有。"""
+        raw = '```json\n{"sections": [{"s": "一句。", "src": [2]}]}\n```'
+
+        self.assertEqual(render_json_guide(raw), ("一句。 [S2]", None))
+
+    def test_a_non_integer_source_is_dropped_not_guessed(self):
+        """src 里的非整数直接丢掉：渲染器不猜"它大概是 S1"。"""
+        content, error = render_json_guide(
+            '{"sections": [{"s": "一句。", "src": ["1", 2, "x"]}]}')
+
+        self.assertIsNone(error)
+        self.assertEqual(content, "一句。 [S2]")
+
+    def test_invalid_output_reports_a_reason_instead_of_faking_content(self):
+        for raw, reason in (("不是 JSON", "json_parse_failed"),
+                            ('{"no": "sections"}', "json_shape_failed"),
+                            ('{"sections": []}', "json_empty"),
+                            ('{"sections": [42]}', "json_empty")):
+            with self.subTest(raw=raw):
+                content, error = render_json_guide(raw)
+                self.assertIsNone(content)
+                self.assertTrue(error.startswith(reason), error)
+
+
 class StudioServiceTests(unittest.TestCase):
     def build(self, upload=True, client_chunks=None):
         client, service, captured, app = build_harness(self, upload, client_chunks)
@@ -164,12 +202,16 @@ class StudioServiceTests(unittest.TestCase):
         self.assertIn("[S1]", prompt)
 
     def test_the_token_stream_is_forwarded_for_the_guide(self):
-        self.build(client_chunks=("甲", "乙"))
+        self.build(client_chunks=('{"sections": [{"s": "内容到位。", "src": [1]}',
+                                  ', {"s": "第二句。", "src": [1]}]}'))
 
         events = self.events()
 
-        self.assertEqual([event["text"] for event in events if event["type"] == "token"], ["甲", "乙"])
-        self.assertEqual(events[-1]["content"], "甲乙")
+        self.assertEqual([event["text"] for event in events if event["type"] == "token"],
+                         ['{"sections": [{"s": "内容到位。", "src": [1]}',
+                          ', {"s": "第二句。", "src": [1]}]}'])
+        # final 里是**渲染后**的正文：token 是原始 JSON 碎片，用户看到的不是它。
+        self.assertEqual(events[-1]["content"], "内容到位。 [S1]\n第二句。 [S1]")
 
     def test_a_stored_guide_recomputes_its_rate_instead_of_storing_it(self):
         """命中率按正文现算：落库的分数会和正文各自演化，而正文才是唯一事实来源。"""
@@ -231,6 +273,75 @@ class StudioServiceTests(unittest.TestCase):
         self.assertEqual(final["error"], "deepseek_not_configured")
         self.assertEqual(final["message"], "尚未配置 DeepSeek API Key，请前往设置。")
         self.assertEqual(self.service.get_artifact(final["artifact_id"])["status"], "failed")
+
+    def test_unparseable_output_fails_the_artifact_instead_of_faking_a_guide(self):
+        """模型没吐 JSON（DeepSeek 走提示词约束，可能跑题）：如实失败，原始输出留在
+        正文里供排查，而不是把一段散文当指南存进去假装成功。"""
+        self.build(client_chunks=("我按你的主题写一篇关于", "分页管理的文章如下："))
+
+        final = self.events()[-1]
+
+        self.assertEqual(final["type"], "error")
+        self.assertEqual(final["error"], "invalid_model_output")
+        self.assertIn("无法解析", final["message"])
+        stored = self.service.get_artifact(final["artifact_id"])
+        self.assertEqual(stored["status"], "failed")
+        self.assertEqual(stored["error_code"], "invalid_model_output")
+        self.assertIn("分页管理的文章", stored["content"])
+
+    def test_a_cancelled_guide_renders_what_completed_and_stores_the_rest_as_is(self):
+        """停止的两副面孔：JSON 已完整写出的部分照常渲染；渲染不出的半截如实存原文。
+        详情页要看到模型真正写到哪，而不是一份像样的假正文。"""
+        chunks = ('{"sections": [{"s": "第一句。", "src": [1]}',
+                  ', {"s": "第二句。", "src": [1]}]}')
+
+        class Cancelling:
+            def __init__(self, cancel_after):
+                self.cancel_after = cancel_after
+
+            def stream_chat(self, messages, cancel_event=None):
+                for index, chunk in enumerate(chunks):
+                    yield chunk
+                    if index == self.cancel_after:
+                        cancel_event.set()
+
+        service = self.build()
+        # 吐完整个 JSON 才取消：能渲染，正文就是渲染结果。
+        cancel = threading.Event()
+        service.client_factory = lambda settings: Cancelling(1)
+        stopped = list(service.stream("分页管理", "guide", cancel_event=cancel))[-1]
+        self.assertEqual(stopped["type"], "stopped")
+        self.assertEqual(stopped["content"], "第一句。 [S1]\n第二句。 [S1]")
+        self.assertEqual(stopped["backlink"]["with_source"], 2)
+        self.assertEqual(service.get_artifact(stopped["artifact_id"])["status"], "stopped")
+
+        # 只吐了第一片就取消：渲染不出正文，存的就是原始 JSON 碎片。
+        cancel = threading.Event()
+        service.client_factory = lambda settings: Cancelling(0)
+        stopped = list(service.stream("分页管理", "guide", cancel_event=cancel))[-1]
+        self.assertEqual(stopped["type"], "stopped")
+        self.assertEqual(stopped["content"], chunks[0])
+        self.assertEqual(service.get_artifact(stopped["artifact_id"])["status"], "stopped")
+
+    def test_json_mode_is_requested_only_on_the_ollama_path(self):
+        """format=json 由 OllamaClient 带进 payload，且只在产出这条线开：问答共用同一个
+        client_factory，全局开了会把问答输出也变成 JSON。"""
+        self.build()
+        created = []
+        inner = self.service.client_factory
+
+        def factory(settings):
+            client = inner(settings)
+            created.append(client)
+            return client
+
+        self.service.client_factory = factory
+        self.events()
+        self.assertTrue(created[0].json_mode)
+
+        self.client.patch("/api/v1/settings", json={"provider": "deepseek"})
+        self.events()
+        self.assertFalse(created[1].json_mode)
 
     def test_artifacts_left_running_by_a_restart_are_marked_stopped(self):
         """进程重启后不该留下永远"生成中"的记录，界面会一直转圈。"""
