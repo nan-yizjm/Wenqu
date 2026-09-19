@@ -5,7 +5,7 @@ import { ChatPage } from './ChatPage'
 import { FavoritesPage } from './FavoritesPage'
 import { StudioPage } from './StudioPage'
 import { ExitControl, SignedOff } from './ExitControl'
-import { applyTheme, THEME_OPTIONS, watchSystemTheme } from './lib/theme'
+import { applyTemplate, applyTheme, TEMPLATE_OPTIONS, THEME_OPTIONS, useResolvedTheme, watchSystemTheme } from './lib/theme'
 
 type Page = 'library' | 'chat' | 'studio' | 'favorites' | 'settings'
 const nav: { id: Page; icon: string; label: string }[] = [
@@ -20,6 +20,8 @@ function Settings({ setup, reload, onExit }: {
   setup: SetupState; reload: () => Promise<void>; onExit: () => void
 }) {
   const [form, setForm] = useState<ProductSettings>(setup.settings)
+  // 未保存的选择也算数：点"深色"时模板样本应该立刻跟着变深，而不是等保存之后。
+  const resolvedTheme = useResolvedTheme(form.theme)
   const [key, setKey] = useState('')
   const [message, setMessage] = useState('')
   const [modelState, setModelState] = useState(setup.retrieval_model)
@@ -114,7 +116,28 @@ function Settings({ setup, reload, onExit }: {
     <div className="settings-grid">
       <section className="card"><h3>工作台</h3><label>显示名称<input value={form.display_name}
         onChange={e => setForm({ ...form, display_name: e.target.value })} /></label>
-        <label>外观</label><div className="segmented">
+        <label>外观</label>
+        <div className="template-picker">
+          {TEMPLATE_OPTIONS.map(option => {
+            // 样本跟着当前实际明暗走：深色界面里显示各模板的深色版本，
+            // 用户看到的才是"切过去的样子"。
+            const swatch = option.swatch[resolvedTheme]
+            return <button key={option.value}
+              type="button"
+              className={form.theme_template === option.value ? 'active' : ''}
+              data-testid={`template-${option.value}`}
+              onClick={() => { setForm({ ...form, theme_template: option.value }); applyTemplate(option.value) }}>
+              <span className="template-swatch" aria-hidden="true"
+                style={{ background: swatch.bg }}>
+                <i style={{ background: swatch.surface }} />
+                <b style={{ background: swatch.accent }} />
+              </span>
+              <span className="template-text"><strong>{option.label}</strong><small>{option.hint}</small></span>
+            </button>
+          })}
+        </div>
+        <p className="hint">模板决定色板与圆角；浅色 / 深色各自独立。</p>
+        <div className="segmented">
           {THEME_OPTIONS.map(option => <button key={option.value} className={form.theme === option.value ? 'active' : ''}
             onClick={() => { setForm({ ...form, theme: option.value }); applyTheme(option.value) }}>{option.label}</button>)}
         </div>
@@ -258,6 +281,9 @@ export default function App() {
   const theme = setup?.settings.theme
   useEffect(() => { if (theme) applyTheme(theme) }, [theme])
   useEffect(() => { if (theme) return watchSystemTheme(theme) }, [theme])
+  // 模板的权威来源是服务端设置（跟着数据走）；本地那份只在首屏先摆一下。
+  const template = setup?.settings.theme_template
+  useEffect(() => { if (template) applyTemplate(template) }, [template])
   // 退出态优先于其它所有分支：服务已经没了，`setup` 里那份状态再显示也没意义。
   if (signedOff) return <SignedOff />
   if (failure) return <main className="fatal"><h1>工作台没有准备好</h1><p>{failure}</p><button onClick={() => location.reload()}>重新连接</button></main>

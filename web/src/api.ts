@@ -9,6 +9,8 @@ export type ProductSettings = {
   retrieval_mode: 'bm25' | 'hybrid'
   deepseek_model: string
   theme: 'system' | 'light' | 'dark'
+  /** 皮肤模板：三套色板与圆角刻度（见 lib/theme.ts 与 styles.css 的六个 token 块）。 */
+  theme_template: 'paper' | 'slate' | 'sand'
   /** 记忆接缝的开关。默认关；关着时后端**根本不会调用**记忆提供者。 */
   memory_enabled: boolean
   /** 联网开关。默认关；关着时后端一个字节都不发。 */
