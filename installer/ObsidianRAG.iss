@@ -1,5 +1,5 @@
 #define MyAppName "Obsidian RAG"
-#define MyAppVersion "0.2.1"
+#define MyAppVersion "0.2.2"
 #define MyAppPublisher "nan-yizjm"
 #define MyAppExeName "ObsidianRAG.exe"
 

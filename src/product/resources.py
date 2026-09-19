@@ -10,7 +10,7 @@ from pathlib import Path
 from .paths import bundle_root
 
 
-BUNDLED_DOCS = ("用户指南.md", "RELEASE_NOTES_0.2.1.md", "THIRD_PARTY_LICENSES.md")
+BUNDLED_DOCS = ("用户指南.md", "RELEASE_NOTES_0.2.2.md", "THIRD_PARTY_LICENSES.md")
 BUNDLED_EXAMPLES = ("欢迎使用.md",)
 BUNDLED = {"docs": BUNDLED_DOCS, "examples": BUNDLED_EXAMPLES}
 

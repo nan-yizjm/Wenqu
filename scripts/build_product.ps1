@@ -42,7 +42,7 @@ if (-not $SkipInstaller) {
         $Compiler.FullName
     }
     & $CompilerPath .\installer\ObsidianRAG.iss
-    $Installer = Resolve-Path '.\dist-installer\ObsidianRAG-Setup-0.2.1-win-x64.exe'
+    $Installer = Resolve-Path '.\dist-installer\ObsidianRAG-Setup-0.2.2-win-x64.exe'
     $Hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText(
         "$Installer.sha256", "$Hash  $([System.IO.Path]::GetFileName($Installer))`n",

@@ -1,5 +1,5 @@
 param(
-    [string]$Installer = ".\dist-installer\ObsidianRAG-Setup-0.2.1-win-x64.exe",
+    [string]$Installer = ".\dist-installer\ObsidianRAG-Setup-0.2.2-win-x64.exe",
     [int]$Port = 8879
 )
 $ErrorActionPreference = 'Stop'
