@@ -564,6 +564,13 @@ class MaterialService:
         return [dict(row) for row in self.database.fetchall(
             "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT 50")]
 
+    def active_job_count(self) -> int:
+        """还在跑（或排队）的导入作业数。退出时服务要等它们结束——这个数字让
+        界面能说清楚"在等什么"，而不是让"已退出"变成一句假话。"""
+        row = self.database.fetchone(
+            "SELECT COUNT(*) AS total FROM import_jobs WHERE status IN ('pending', 'running')")
+        return int(row["total"])
+
     def _job(self, job_type: str, payload: dict):
         job_id = _id("job")
         with self.database.transaction() as connection:

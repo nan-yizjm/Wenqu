@@ -410,6 +410,11 @@ class StudioService:
             raise RuntimeError(skipped["reason"])
         raise KeyError("产出不存在。")
 
+    def active_count(self) -> int:
+        """正在生成的产出数。退出时服务要等这些流结束，接口靠它如实交代在等什么。"""
+        with self._active_lock:
+            return len(self._active)
+
     def stop(self, artifact_id: str) -> dict:
         with self._active_lock:
             cancel = self._active.get(artifact_id)

@@ -947,7 +947,7 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
             await file.close()
 
     @app.post("/api/v1/system/shutdown")
-    async def shutdown():
+    async def shutdown(request: Request):
         """让启动器退出。
 
         **没有启动器时如实报错，而不是报成功。** 界面拿这个响应决定要不要显示"已退出"，
@@ -962,9 +962,30 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
                 {"error": "shutdown_unavailable",
                  "message": "这个实例没有连接启动器，无法自行退出；请结束它的进程。"},
                 status_code=503)
+        # uvicorn 收到退出标志后会**等在跑的请求结束**才真正退出（流式生成的长流
+        # 会拖住它）。这个等待是看不见的——不数清楚它，界面上的"已退出"就是一句
+        # 假话。数据库起不来时服务根本不存在，等待清单自然是空的。
+        state = request.app.state
+        database = getattr(state, "database", None)
+        waiting = {
+            "imports": (state.materials.active_job_count()
+                        if database is not None and not database.migration_error
+                        and state.materials else 0),
+            "answers": (state.chat.active_stream_count()
+                        if database is not None and not database.migration_error
+                        and state.chat else 0),
+            "artifacts": (state.studio.active_count()
+                          if database is not None and not database.migration_error
+                          and state.studio else 0),
+        }
         shutdown_callback()
-        return {"status": "shutting_down",
-                "message": "本地服务正在退出。资料、索引和会话都会留在原处。"}
+        message = "本地服务正在退出。资料、索引和会话都会留在原处。"
+        pending = sum(waiting.values())
+        if pending:
+            message += (f"正在等待 {pending} 个进行中的任务完成"
+                        f"（导入 {waiting['imports']}、回答 {waiting['answers']}、"
+                        f"产出 {waiting['artifacts']}），可能需要一点时间。")
+        return {"status": "shutting_down", "waiting": waiting, "message": message}
 
     resolved_static = static_dir or bundle_root() / "web" / "dist"
     assets = resolved_static / "assets"

@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 import zipfile
 
@@ -154,6 +155,27 @@ class ShutdownTests(unittest.TestCase):
             # 连点两次不该出问题：界面上的按钮可能被点两下。
             self.assertEqual(client.post("/api/v1/system/shutdown").status_code, 200)
             self.assertEqual(len(calls), 2)
+
+    def test_shutdown_counts_what_it_must_wait_for_before_saying_done(self):
+        """uvicorn 收到退出标志后会等在跑的流结束——这期间界面显示"已退出"就是
+        假话。接口必须数清楚自己在等什么，让界面能如实说"正在等待"。"""
+        with TestClient(self.build(shutdown_callback=lambda: None),
+                        base_url="http://127.0.0.1:8765") as client:
+            self.assertEqual(
+                client.post("/api/v1/system/shutdown").json()["waiting"],
+                {"imports": 0, "answers": 0, "artifacts": 0})
+
+            # 三类在跑的任务各塞一个：一条回答、一份产出、一个导入作业。
+            client.app.state.chat._active["msg_x"] = threading.Event()
+            client.app.state.studio._active["art_x"] = threading.Event()
+            with client.app.state.database.transaction() as connection:
+                connection.execute(
+                    "INSERT INTO import_jobs(id, job_type, status, payload_json, created_at)"
+                    " VALUES ('job_x', 'file', 'running', '{}', '2026-09-19T00:00:00')")
+
+            self.assertEqual(
+                client.post("/api/v1/system/shutdown").json()["waiting"],
+                {"imports": 1, "answers": 1, "artifacts": 1})
 
 
 if __name__ == "__main__":

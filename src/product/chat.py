@@ -255,6 +255,12 @@ class ChatService:
         return {"deleted": True, "title": conversation["title"],
                 "messages": messages, "kept_favorites": kept}
 
+    def active_stream_count(self) -> int:
+        """正在跑的回答流数。退出时服务要等这些流结束——接口靠它如实交代在等
+        什么，而不是让"已退出"提前变成一句假话。"""
+        with self._active_lock:
+            return len(self._active)
+
     def _has_active_stream(self, conversation_id):
         """会话里还有正在跑的生成线程吗。
 
