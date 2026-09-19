@@ -5,7 +5,7 @@ import { SourcePanel } from './SourcePanel'
 import { EmptyState, SkeletonLines } from './components/Placeholders'
 import { HitMeta, Preview, RelevanceBar } from './components/HitMeta'
 import { FolderPicker } from './components/FolderPicker'
-import { BatchDeleteBar, useSelection } from './components/BatchDelete'
+import { BatchDeleteBar, DisconnectBar, useSelection } from './components/BatchDelete'
 
 export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> }) {
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -21,6 +21,7 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
+  const [disconnecting, setDisconnecting] = useState<Library | null>(null)
   const selection = useSelection()
   const uploadInput = useRef<HTMLInputElement>(null)
   const load = async () => {
@@ -101,7 +102,17 @@ export function LibraryPage({ setupReload }: { setupReload: () => Promise<void> 
       {message && <div className="inline-message">{message}</div>}
       {libraries.some(library => library.kind === 'folder') && <div className="library-sources">{libraries.filter(library => library.kind === 'folder').map(library =>
         <div key={library.id}><span><strong>{library.name}</strong><small>{library.ready_count || 0}/{library.document_count} 个文件可搜索</small></span>
-          <button className="ghost" onClick={async () => { await api.refreshLibrary(library.id); setMessage(`正在刷新 ${library.name}…`); await load() }}>刷新</button></div>)}</div>}
+          <button className="ghost" onClick={async () => { await api.refreshLibrary(library.id); setMessage(`正在刷新 ${library.name}…`); await load() }}>刷新</button>
+          <button className="ghost" data-testid="library-disconnect" onClick={() => setDisconnecting(library)}>断开</button></div>)}</div>}
+      {disconnecting && <DisconnectBar
+        heading={`断开「${disconnecting.name}」？`}
+        lines={[
+          `「${disconnecting.name}」里的 ${disconnecting.document_count} 篇资料将从工作台移除，不再可搜索。`,
+          '原文件夹与文件不会被删除；重新连接同一文件夹即可再次导入。',
+        ]}
+        onConfirm={() => api.removeLibrary(disconnecting.id)}
+        onDone={result => { setDisconnecting(null); void load(); setMessage(`已断开「${disconnecting.name}」，移除 ${result.deleted} 篇资料。`) }}
+        onCancel={() => setDisconnecting(null)} />}
       <section className="search-box"><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void search() }} placeholder="搜索你的全部资料，例如：PagedAttention 解决什么问题？" />
         <button className="primary" onClick={search}>搜索</button></section>
       {hits.length > 0 && <section className="search-results"><div className="section-title"><h2>搜索结果</h2><span>{hits.length} 个片段 · {searched?.effective_mode === 'hybrid' ? '关键词 + 语义' : '关键词'}</span></div>

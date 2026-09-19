@@ -106,3 +106,63 @@ export function BatchDeleteBar({ ids, allIds, heading, lines, confirmLabel = '�
     </div>
   </div>
 }
+
+export type DisconnectBarProps = {
+  /** 确认框标题，例如“断开「Linux学习」？”。 */
+  heading: string
+  /** 后果说明，一行一条。必须与后端行为一致：资料移除、原文件不动。 */
+  lines: string[]
+  onConfirm: () => Promise<BatchResult>
+  /** 断开成功后调用（含移除篇数）——父页面在这里刷新并收起确认条。 */
+  onDone: (result: BatchResult) => void
+  onCancel: () => void
+}
+
+/**
+ * 断开归类的确认条：与 BatchDeleteBar 同一套两段式（页面内确认，不用
+ * `window.confirm`）与结果口径（如实展示移除了多少、有没有没删掉的），
+ * 但没有“已选 N 项”的 idle 相——第一段确认就是卡片上的“断开”按钮本身。
+ */
+export function DisconnectBar({ heading, lines, onConfirm, onDone, onCancel }: DisconnectBarProps) {
+  const [phase, setPhase] = useState<'confirming' | 'working' | 'result'>('confirming')
+  const [result, setResult] = useState<BatchResult | null>(null)
+  const [error, setError] = useState('')
+
+  const run = async () => {
+    setPhase('working')
+    try {
+      const outcome = await onConfirm()
+      setResult(outcome); setPhase('result')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '断开失败'); setPhase('confirming')
+    }
+  }
+
+  if (phase === 'result' && result) {
+    return <div className="batch-bar batch-result" data-testid="library-disconnect-result" aria-live="polite">
+      <div>
+        <strong>已断开，移除 {result.deleted} 篇资料</strong>
+        {result.skipped.length > 0 && <>
+          <span>以下 {result.skipped.length} 项未移除：</span>
+          <ul>{result.skipped.map(item =>
+            <li key={item.id}>{item.label ?? item.id}：{item.reason}</li>)}</ul>
+        </>}
+      </div>
+      <button className="ghost" onClick={() => onDone(result)}>完成</button>
+    </div>
+  }
+
+  return <div className="batch-bar batch-confirm" aria-live="polite">
+    <div>
+      <strong>{heading}</strong>
+      {lines.map(line => <p key={line}>{line}</p>)}
+      {error && <p className="batch-error">{error}</p>}
+    </div>
+    <div className="batch-actions">
+      <button className="ghost" disabled={phase === 'working'} onClick={() => { setError(''); onCancel() }}>再想想</button>
+      <button className="danger" data-testid="library-disconnect-confirm"
+        disabled={phase === 'working'} onClick={() => void run()}>
+        {phase === 'working' ? '正在断开…' : '确认断开'}</button>
+    </div>
+  </div>
+}

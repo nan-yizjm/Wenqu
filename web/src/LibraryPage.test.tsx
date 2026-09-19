@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   libraries: vi.fn(),
   documents: vi.fn(),
   removeDocuments: vi.fn(),
+  removeLibrary: vi.fn(),
 }))
 
 vi.mock('./api', () => ({
@@ -25,6 +26,7 @@ vi.mock('./api', () => ({
     search: vi.fn(),
     removeDocument: vi.fn(),
     removeDocuments: (ids: string[]) => mocks.removeDocuments(ids),
+    removeLibrary: (id: string) => mocks.removeLibrary(id),
     retryDocument: vi.fn(),
     importBundledExample: vi.fn(),
   },
@@ -62,6 +64,7 @@ beforeEach(() => {
   mocks.libraries.mockResolvedValue({ libraries: [] })
   mocks.documents.mockResolvedValue({ documents: [] })
   mocks.removeDocuments.mockResolvedValue({ deleted: 0, skipped: [] })
+  mocks.removeLibrary.mockResolvedValue({ library_id: 'lib-folder', name: '我的笔记本', deleted: 0, skipped: [] })
 })
 
 describe('LibraryPage 的文件夹选择入口', () => {
@@ -153,5 +156,41 @@ describe('LibraryPage 的批量移除', () => {
     expect(screen.queryByText('移除 1 篇资料？')).not.toBeInTheDocument()
     expect(mocks.removeDocuments).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: '批量选择' })).toBeInTheDocument()
+  })
+})
+
+describe('LibraryPage 的断开归类', () => {
+  it('断开前确认并把后果说清，确认后调接口并报告移除篇数', async () => {
+    mocks.libraries.mockResolvedValue({ libraries: [folderLibrary] })
+    mocks.removeLibrary.mockResolvedValue(
+      { library_id: 'lib-folder', name: '我的笔记本', deleted: 1, skipped: [] })
+    setup()
+
+    fireEvent.click(await screen.findByRole('button', { name: '断开' }))
+
+    expect(await screen.findByText('断开「我的笔记本」？')).toBeInTheDocument()
+    // 文案纪律：断开不是"永久删除"（软删口径，行都留着），原文件必须说不动。
+    expect(screen.getByText(/1 篇资料将从工作台移除，不再可搜索/)).toBeInTheDocument()
+    expect(screen.getByText(/原文件夹与文件不会被删除；重新连接同一文件夹即可再次导入/)).toBeInTheDocument()
+    expect(screen.queryByText(/永久删除/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('library-disconnect-confirm'))
+    await waitFor(() => expect(mocks.removeLibrary).toHaveBeenCalledWith('lib-folder'))
+    expect(await screen.findByText('已断开，移除 1 篇资料')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    expect(await screen.findByText(/已断开「我的笔记本」，移除 1 篇资料/)).toBeInTheDocument()
+    expect(screen.queryByTestId('library-disconnect-confirm')).not.toBeInTheDocument()
+  })
+
+  it('「再想想」收起确认条，不发任何请求', async () => {
+    mocks.libraries.mockResolvedValue({ libraries: [folderLibrary] })
+    setup()
+
+    fireEvent.click(await screen.findByRole('button', { name: '断开' }))
+    fireEvent.click(await screen.findByRole('button', { name: '再想想' }))
+
+    expect(screen.queryByTestId('library-disconnect-confirm')).not.toBeInTheDocument()
+    expect(mocks.removeLibrary).not.toHaveBeenCalled()
   })
 })

@@ -347,6 +347,9 @@ export const api = {
     '/api/v1/libraries/folders', { method: 'POST', body: JSON.stringify({ path }) }),
   refreshLibrary: (id: string) => request<{ job_id: string }>(
     `/api/v1/libraries/${id}/refresh`, { method: 'POST' }),
+  /** 断开一个文件夹归类：其下资料一并移除，原文件夹与文件不动。 */
+  removeLibrary: (id: string) => request<{ library_id: string; name: string; deleted: number; skipped: BatchSkip[] }>(
+    `/api/v1/libraries/${id}`, { method: 'DELETE' }),
   upload: (file: File) => { const body = new FormData(); body.append('file', file); return request<{ document_id: string; job_id: string }>(
     '/api/v1/documents/upload', { method: 'POST', body }) },
   removeDocument: (id: string) => request<{ removed: boolean }>(`/api/v1/documents/${id}`, { method: 'DELETE' }),
