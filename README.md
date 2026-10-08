@@ -1,6 +1,6 @@
-# Obsidian RAG
+# Wenqu
 
-一个可在 Windows 本机运行的个人知识工作台：把 Markdown、文字型 PDF 和 Jupyter Notebook 接入本地资料库，用 Ollama 或 DeepSeek 搜索、追问、核对来源，并把有用结论收藏或导出为 Markdown。
+一个可在 Windows 本机运行的个人知识工作台（**原名 Obsidian RAG**，2026-09-22 起改名为 Wenqu）：把 Markdown、文字型 PDF 和 Jupyter Notebook 接入本地资料库，用 Ollama 或 DeepSeek 搜索、追问、核对来源，并把有用结论收藏或导出为 Markdown。
 
 当前产品版本：**0.2.2**。项目仍是个人学习与小范围试用项目，不是云端 SaaS。
 

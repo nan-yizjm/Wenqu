@@ -41,8 +41,8 @@ if (-not $SkipInstaller) {
     } else {
         $Compiler.FullName
     }
-    & $CompilerPath .\installer\ObsidianRAG.iss
-    $Installer = Resolve-Path '.\dist-installer\ObsidianRAG-Setup-0.2.2-win-x64.exe'
+    & $CompilerPath .\installer\Wenqu.iss
+    $Installer = Resolve-Path '.\dist-installer\Wenqu-Setup-0.2.2-win-x64.exe'
     $Hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText(
         "$Installer.sha256", "$Hash  $([System.IO.Path]::GetFileName($Installer))`n",

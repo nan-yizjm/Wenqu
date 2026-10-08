@@ -242,8 +242,8 @@ function Welcome({ setup, done }: { setup: SetupState; done: () => Promise<void>
       await done()
     } catch (e) { setError(e instanceof Error ? e.message : '保存失败') }
   }
-  return <main className="welcome"><div className="welcome-copy"><div className="brand-mark">OR</div>
-    <span className="eyebrow">PERSONAL KNOWLEDGE WORKSPACE</span><h1>让你的资料<br />变成可追溯的答案</h1>
+  return <main className="welcome"><div className="welcome-copy"><div className="brand-mark">W</div>
+    <span className="eyebrow">WENQU · PERSONAL KNOWLEDGE WORKSPACE</span><h1>让你的资料<br />变成可追溯的答案</h1>
     <p>在本机整理 Markdown 与 PDF，搜索原文、继续追问，并把有价值的结论保存下来。</p>
     <div className="privacy-note"><strong>资料留在你的电脑</strong><span>只有选择远端模型时，回答所需片段才会发送给服务商。</span></div>
   </div><div className="setup-card"><span className="step">首次设置 · 1 分钟</span><h2>创建你的工作台</h2>
@@ -293,10 +293,10 @@ export default function App() {
   // 退出态优先于其它所有分支：服务已经没了，`setup` 里那份状态再显示也没意义。
   if (signedOff) return <SignedOff />
   if (failure) return <main className="fatal"><h1>工作台没有准备好</h1><p>{failure}</p><button onClick={() => location.reload()}>重新连接</button></main>
-  if (!setup) return <main className="loading"><div className="spinner" /><p>正在打开知识工作台…</p></main>
+  if (!setup) return <main className="loading"><div className="spinner" /><p>正在打开 Wenqu…</p></main>
   if (setup.recovery_required) return <Recovery setup={setup} onExit={() => setSignedOff(true)} />
   if (!setup.settings.onboarding_complete) return <Welcome setup={setup} done={reload} />
-  return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">OR</div><div><strong>{setup.settings.display_name}</strong><span>个人知识工作台</span></div></div>
+  return <div className="shell"><aside><div className="sidebar-brand"><div className="brand-mark small">W</div><div><strong>{setup.settings.display_name}</strong><span>本地知识工作台</span></div></div>
     <nav>{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} title={item.label} onClick={() => setPage(item.id)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{item.label}</span></button>)}</nav>
     <div className="sidebar-status"><span className={`dot ${setup.materials.ready_documents ? '' : 'amber'}`} /><div><strong>{setup.materials.ready_documents ? `${setup.materials.ready_documents} 份资料可用` : '等待添加资料'}</strong><small>{setup.materials.chunk_count ? `${setup.materials.chunk_count} 个可检索片段` : '本地服务已就绪'}</small></div></div>
     {/* 退出入口常驻在侧栏，而不是只放在设置页：正常使用下**必须有一个**能停下来

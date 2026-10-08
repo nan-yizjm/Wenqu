@@ -5,7 +5,7 @@
 // 这个脚本走的是打包后的真实产物：无头 Chrome 打开正在跑的便携版 → 点击 → 断言 → 截图。
 //
 // 用法：
-//   1) 先让应用跑起来（例如 .\dist\ObsidianRAG\ObsidianRAG.exe）
+//   1) 先让应用跑起来（例如 .\dist\Wenqu\Wenqu.exe）
 //   2) node scripts/ui_acceptance.cjs [端口，默认 8765]
 //   3) 退出码 0 表示全部断言通过；截图落在 UI_SHOT_DIR（默认系统临时目录）
 //
@@ -127,7 +127,7 @@ const clickByText = (text, scope) => `(() => {
 
   // ---- 1. 应用起来了 ----
   const title = await s.eval('document.title');
-  check('应用页面已加载', title.includes('Obsidian RAG'), `title=${title}`);
+  check('应用页面已加载', title.includes('Wenqu'), `title=${title}`);
 
   // ---- 2. 删除会话：每个会话都要有删除按钮 ----
   await s.eval(`(() => { const b=[...document.querySelectorAll('nav button')].find(x=>x.textContent.includes('知识问答')); if(b) b.click(); })()`);
@@ -454,16 +454,35 @@ const clickByText = (text, scope) => `(() => {
 
   // 收尾：把自己造出来的那条记录删掉。删除会弹原生 confirm，而无头 Chrome 下它会
   // 阻塞脚本求值，所以先把确认短路掉——这是测试钩子，不是被测行为。
-  const listed = await s.eval(`document.querySelectorAll('.studio-list button').length`);
+  //
+  // 数条数之前要**等列表渲染**：在一个此前没有任何产出的数据根上，刚生成的那条要等
+  // 前端重绘出来，抢在前面取数会数到 0，断言 `remaining === listed - 1` 就成了
+  // `0 === -1` —— 一次假 FAIL（实测在真实数据根上挂过，脚本判断从"删不掉"变成
+  // "数早了"）。删除之后同样要等它重绘再判定少了一条。
+  let listed = 0;
+  for (let i = 0; i < 20; i++) {
+    listed = await s.eval(`document.querySelectorAll('.studio-list button').length`);
+    if (listed > 0) break;
+    await sleep(300);
+  }
   if (listed > 0) {
     await s.eval(`window.confirm = () => true`);
     await s.eval(`(() => { const b = document.querySelector('.studio-list button'); if (b) b.click(); })()`);
     await sleep(1200);
     await s.eval(clickByText('删除', '.studio-detail-head'));
-    await sleep(1500);
-    const remaining = await s.eval(`document.querySelectorAll('.studio-list button').length`);
+    let remaining = listed;
+    for (let i = 0; i < 20; i++) {
+      remaining = await s.eval(`document.querySelectorAll('.studio-list button').length`);
+      if (remaining < listed) break;
+      await sleep(300);
+    }
+    // 失败时把列表里的标题一起带上：只看到两个数字对不上，没法判断是"没删掉"
+    // 还是"数错了"。空列表时 `.studio-list` 根本不存在（渲染的是 `.studio-empty`），
+    // 所以条数为 0 也可能是正常终态。
+    const 剩余标题 = await s.eval(
+      `[...document.querySelectorAll('.studio-list button')].map(b => b.textContent.replace(/\\s+/g, ' ').slice(0, 24))`);
     check('产出页删得掉自己生成的记录（跑完不留痕迹）', remaining === listed - 1,
-          `${listed} -> ${remaining}`);
+          `${listed} -> ${remaining} | 剩余：${JSON.stringify(剩余标题)}`);
   }
 
   // ---- 13. 批量删除：资料库页的完整选择 → 确认 → 删除流程 ----

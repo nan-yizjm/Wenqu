@@ -51,7 +51,7 @@ ALLOWED_SETTINGS = {
 DEFAULT_SETTINGS = {
     "provider": "ollama", "ollama_base_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen2.5:7b", "onboarding_complete": False,
-    "display_name": "我的知识工作台", "retrieval_mode": "bm25",
+    "display_name": "Wenqu", "retrieval_mode": "bm25",
     "deepseek_model": "deepseek-chat", "theme": "system",
     "theme_template": "paper",
     "memory_enabled": False,

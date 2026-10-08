@@ -221,7 +221,7 @@ export function ChatPage() {
           : !active?.messages?.length ? <EmptyState glyph="✦" title="从自己的资料开始提问" tall>
             <p>答案中的引用可以直接打开当时使用的原文快照。</p></EmptyState> : null}
         {active?.messages?.map(item => <article key={item.id} className={`message ${item.role} ${item.status}`}>
-          <div className="message-label">{item.role === 'user' ? '你' : '知识工作台'}{item.status === 'stopped' ? ' · 未完成' : item.status === 'failed' ? ' · 失败' : ''}</div>
+          <div className="message-label">{item.role === 'user' ? '你' : 'Wenqu'}{item.status === 'stopped' ? ' · 未完成' : item.status === 'failed' ? ' · 失败' : ''}</div>
           {item.role === 'user' ? <div className="question-text">{item.content}</div>
             : item.status === 'streaming' ? <div className="answer-text">{item.content}</div>
             : <AnswerMarkdown content={item.content} sources={item.sources} open={setSelected} />}

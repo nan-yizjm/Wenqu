@@ -337,7 +337,7 @@ def render_html(model: dict) -> str:
 {headings}
 <footer class="band foot">
  <div>{escape(model["footer"])}</div>
- <div>数据源 {escape(model["artifact_id"])} · 由 Obsidian RAG 渲染 · 版面
+ <div>数据源 {escape(model["artifact_id"])} · 由 Wenqu 渲染 · 版面
    {model["width"]}×{model["height"]}，导出 {model["width"] * model["scale"]}×
    {model["height"] * model["scale"]} 像素</div>
 </footer>

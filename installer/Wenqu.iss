@@ -1,18 +1,18 @@
-#define MyAppName "Obsidian RAG"
+#define MyAppName "Wenqu"
 #define MyAppVersion "0.2.2"
 #define MyAppPublisher "nan-yizjm"
-#define MyAppExeName "ObsidianRAG.exe"
+#define MyAppExeName "Wenqu.exe"
 
 [Setup]
 AppId={{C36C1420-B87C-4E80-B2B2-89447061C8C7}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\ObsidianRAG
+DefaultDirName={localappdata}\Programs\Wenqu
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 OutputDir=..\dist-installer
-OutputBaseFilename=ObsidianRAG-Setup-{#MyAppVersion}-win-x64
+OutputBaseFilename=Wenqu-Setup-{#MyAppVersion}-win-x64
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -20,7 +20,13 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\dist\ObsidianRAG\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Wenqu\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; 旧品牌的安装目录：升级安装（AppId 不变）不会自动清理它，留着会在磁盘上留一整套
+; 旧程序。删的是**程序目录**，不是数据目录——资料、索引与会话在
+; {localappdata}\ObsidianRAG（没有 Programs 这一层），两者互不相干。
+[InstallDelete]
+Type: filesandordirs; Name: "{localappdata}\Programs\ObsidianRAG"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

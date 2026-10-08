@@ -1,5 +1,5 @@
 param(
-    [string]$Executable = ".\dist\ObsidianRAG\ObsidianRAG.exe",
+    [string]$Executable = ".\dist\Wenqu\Wenqu.exe",
     [int]$Port = 8876,
     [string]$DataRoot = "",
     [int]$ExpectedMinimumConversations = 0,

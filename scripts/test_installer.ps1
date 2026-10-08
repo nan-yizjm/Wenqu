@@ -1,5 +1,5 @@
 param(
-    [string]$Installer = ".\dist-installer\ObsidianRAG-Setup-0.2.2-win-x64.exe",
+    [string]$Installer = ".\dist-installer\Wenqu-Setup-0.2.2-win-x64.exe",
     [int]$Port = 8879
 )
 $ErrorActionPreference = 'Stop'
@@ -31,7 +31,7 @@ if ($Install.ExitCode -ne 0) {
 $ExpectedDataRetention = $false
 try {
     & (Join-Path $ProjectRoot 'scripts\test_product_bundle.ps1') `
-        -Executable (Join-Path $InstallRoot 'ObsidianRAG.exe') -Port $Port `
+        -Executable (Join-Path $InstallRoot 'Wenqu.exe') -Port $Port `
         -DataRoot $DataRoot -ExpectedMinimumConversations 0
     $ExpectedDataRetention = $true
     $Upgrade = Start-Process -FilePath $InstallerPath -ArgumentList @(
@@ -40,7 +40,7 @@ try {
     ) -WindowStyle Hidden -PassThru -Wait
     if ($Upgrade.ExitCode -ne 0) { throw "Upgrade install failed: $($Upgrade.ExitCode)" }
     & (Join-Path $ProjectRoot 'scripts\test_product_bundle.ps1') `
-        -Executable (Join-Path $InstallRoot 'ObsidianRAG.exe') -Port ($Port + 1) `
+        -Executable (Join-Path $InstallRoot 'Wenqu.exe') -Port ($Port + 1) `
         -DataRoot $DataRoot -ExpectedMinimumConversations 1 -ExpectFreshImport $false
     Write-Host "Installer and data-preserving upgrade validation passed: $InstallRoot"
 } finally {

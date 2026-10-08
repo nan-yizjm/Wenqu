@@ -57,8 +57,8 @@ export function RestartControl({ onReload, timeoutMs = 90000 }: {
       if (Date.now() > deadline) {
         setPhase('failed')
         setNote(sawDown
-          ? '服务已经停下，但一直没有回来。请重新打开知识工作台。'
-          : '重启请求已发出，但服务没有变化。请重新打开知识工作台。')
+          ? '服务已经停下，但一直没有回来。请重新打开 Wenqu。'
+          : '重启请求已发出，但服务没有变化。请重新打开 Wenqu。')
         return
       }
       timer.current = window.setTimeout(() => void poll(), 400)

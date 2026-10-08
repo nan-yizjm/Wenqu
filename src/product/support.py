@@ -145,7 +145,7 @@ class SupportService:
             finally:
                 shutil.rmtree(rollback, ignore_errors=True)
         except (zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError("不是有效的 Obsidian RAG 备份。") from error
+            raise ValueError("不是有效的 Wenqu 备份。") from error
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 

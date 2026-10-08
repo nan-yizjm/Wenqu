@@ -1,5 +1,5 @@
 param(
-    [string]$Executable = ".\dist\ObsidianRAG\ObsidianRAG.exe",
+    [string]$Executable = ".\dist\Wenqu\Wenqu.exe",
     [string]$DataRoot = "$env:LOCALAPPDATA\ObsidianRAG",
     [int]$Port = 8878
 )
