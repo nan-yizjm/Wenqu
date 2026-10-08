@@ -1,0 +1,45 @@
+name: Product checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-cpu:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install CPU dependencies
+        shell: pwsh
+        run: |
+          python -m pip install 'torch==2.13.0' --index-url https://download.pytorch.org/whl/cpu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install -r requirements-product.txt -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix web ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Python tests
+        run: python -X utf8 -m unittest discover -s tests
+      - name: Frontend tests
+        run: npm --prefix web run test
+      - name: Production build
+        run: npm --prefix web run build
+      - name: CSS tokens
+        run: ./scripts/check_css_tokens.ps1
+      - name: Python dependency integrity
+        run: python -m pip check
+      - name: Python advisories
+        run: python scripts/audit_dependencies.py
+      - name: npm advisories
+        run: npm --prefix web audit --audit-level=high

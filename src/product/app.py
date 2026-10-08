@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import sys
 import threading
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -122,8 +123,18 @@ class SettingsPatch(BaseModel):
     @field_validator("ollama_base_url")
     @classmethod
     def local_ollama_only(cls, value):
-        if value is not None and not value.startswith(("http://127.0.0.1", "http://localhost")):
-            raise ValueError("第一版本只允许连接本机 Ollama")
+        if value is not None:
+            try:
+                parsed = urlsplit(value)
+                valid = (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+                         and parsed.username is None and parsed.password is None
+                         and (parsed.port is None or 1 <= parsed.port <= 65535)
+                         and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
+                         and not any(c.isspace() or c == "\\" for c in value))
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ValueError("只允许 http 本机 Ollama 地址，可指定端口，不允许路径或登录信息")
         return value.rstrip("/") if value else value
 
 
@@ -350,8 +361,19 @@ def create_product_app(paths: ProductPaths | None = None, credential_store=None,
         origin = request.headers.get("origin")
         if host not in {"127.0.0.1", "localhost", "testserver"}:
             return JSONResponse({"error": "local_access_required"}, status_code=403)
-        if origin and not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
-            return JSONResponse({"error": "local_origin_required"}, status_code=403)
+        if origin:
+            try:
+                parsed = urlsplit(origin)
+                same_origin = (parsed.scheme == request.url.scheme
+                               and parsed.hostname == request.url.hostname
+                               and (parsed.port or 80) == (request.url.port or 80)
+                               and parsed.username is None and parsed.password is None
+                               and not parsed.path and not parsed.query and not parsed.fragment
+                               and not any(c.isspace() or c == "\\" for c in origin))
+            except ValueError:
+                same_origin = False
+            if not same_origin:
+                return JSONResponse({"error": "local_origin_required"}, status_code=403)
         if (getattr(request.app.state, "restore_pending", False)
                 and request.url.path not in {"/api/v1/health", "/api/v1/system/shutdown",
                                              "/api/v1/system/restart"}):

@@ -1,17 +1,35 @@
-#define MyAppName "Wenqu"
-#define MyAppVersion "0.2.2"
+#ifndef MyAppName
+  #define MyAppName "Wenqu"
+#endif
+#ifndef MyAppVersion
+  #define MyAppVersion "0.2.3"
+#endif
 #define MyAppPublisher "nan-yizjm"
-#define MyAppExeName "Wenqu.exe"
+#ifndef MyAppExeName
+  #define MyAppExeName "Wenqu.exe"
+#endif
+#ifndef BundleDir
+  #define BundleDir "..\dist\Wenqu"
+#endif
+#ifndef MyAppId
+  #define MyAppId "{{C36C1420-B87C-4E80-B2B2-89447061C8C7}"
+#endif
+#ifndef TestBuild
+  #define TestBuild 0
+#endif
+#ifndef InstallerOutputDir
+  #define InstallerOutputDir "..\dist-installer"
+#endif
 
 [Setup]
-AppId={{C36C1420-B87C-4E80-B2B2-89447061C8C7}
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\Wenqu
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
-OutputDir=..\dist-installer
+OutputDir={#InstallerOutputDir}
 OutputBaseFilename=Wenqu-Setup-{#MyAppVersion}-win-x64
 Compression=lzma2
 SolidCompression=yes
@@ -20,13 +38,13 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\dist\Wenqu\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; 旧品牌的安装目录：升级安装（AppId 不变）不会自动清理它，留着会在磁盘上留一整套
-; 旧程序。删的是**程序目录**，不是数据目录——资料、索引与会话在
-; {localappdata}\ObsidianRAG（没有 Programs 这一层），两者互不相干。
+; 相同 AppId 升级沿用原安装位置。只移除本次安装目录内的旧入口，
+; 不递归删除固定的旧品牌目录，也不触碰用户数据或其他安装。
 [InstallDelete]
-Type: filesandordirs; Name: "{localappdata}\Programs\ObsidianRAG"
+Type: files; Name: "{app}\ObsidianRAG.exe"
+Type: files; Name: "{app}\ObsidianRAG.exe.manifest"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

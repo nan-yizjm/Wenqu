@@ -264,6 +264,61 @@ def _style_height(selector: str) -> int | None:
 
 
 class HeadlessTests(unittest.TestCase):
+    def test_autodetection_falls_back_and_records_the_failed_browser(self):
+        folder = temp_dir(self)
+        browser = folder / "second-browser.exe"
+        browser.touch()
+        calls = []
+        def run(args, timeout):
+            calls.append(args[0])
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(args, 0, b"", b"first failed")
+            Path(args[-2].split("=", 1)[1]).write_bytes(png_bytes(20, 20))
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        with mock.patch.dict(os.environ, {headless.RENDERER_ENV: ""}), \
+                mock.patch.object(headless, "browser_candidates", return_value=[Path(sys.executable), browser]), \
+                mock.patch.object(headless, "_run_browser", side_effect=run):
+            result = headless.screenshot(folder / "a.html", folder / "a.png", width=10, height=10)
+        self.assertEqual(result["browser_path"], str(browser))
+        self.assertEqual(len(result["attempt_failures"]), 1)
+        self.assertEqual(headless.png_dimensions(folder / "a.png"), (20, 20))
+        self.assertEqual(len(calls), 2)
+
+    def test_explicit_browser_failure_does_not_fall_back_or_overwrite_png(self):
+        folder = temp_dir(self)
+        output = folder / "existing.png"
+        output.write_bytes(png_bytes(20, 20))
+        with mock.patch.object(headless, "_run_browser", return_value=
+                               subprocess.CompletedProcess([], 1, b"", b"failure")) as run:
+            with self.assertRaises(RenderFailed):
+                headless.screenshot(folder / "a.html", output, width=10, height=10,
+                                    browser=sys.executable)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(output.read_bytes(), png_bytes(20, 20))
+        self.assertFalse(list(folder.glob("*.staged.png")))
+
+    def test_a_timeout_reserves_time_for_the_next_browser(self):
+        folder = temp_dir(self)
+        browsers = [folder / "edge.exe", folder / "chrome.exe"]
+        for browser in browsers:
+            browser.touch()
+        calls = []
+        def run(args, timeout):
+            calls.append(timeout)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(args, timeout)
+            Path(args[-2].split("=", 1)[1]).write_bytes(png_bytes(20, 20))
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        with mock.patch.dict(os.environ, {headless.RENDERER_ENV: ""}), \
+                mock.patch.object(headless, "browser_candidates", return_value=browsers), \
+                mock.patch.object(headless, "_run_browser", side_effect=run), \
+                mock.patch.object(headless.time, "perf_counter", side_effect=[0, 0, 0, 5, 5, 5, 6]):
+            result = headless.screenshot(folder / "a.html", folder / "a.png",
+                                         width=10, height=10, timeout=10)
+        self.assertEqual(calls, [5, 5])
+        self.assertEqual(result["browser"], "Google Chrome")
+        self.assertIn("超时", result["attempt_failures"][0]["message"])
+
     def test_the_environment_variable_wins_over_autodetection(self):
         """`OBSIDIAN_RAG_BROWSER` 是"找不到浏览器"时唯一的人工出口，必须真的生效。"""
         with mock.patch.dict(os.environ, {headless.RENDERER_ENV: sys.executable}):
@@ -318,7 +373,7 @@ class HeadlessTests(unittest.TestCase):
     def test_a_timeout_is_reported_as_a_failure(self):
         """真机上的超时在这里用替身模拟：要测的是"超时被如实报出来"，不是浏览器的
         启动速度。真边界在实机验收跑过（见 docs/学习记录/37）。"""
-        with mock.patch.object(headless.subprocess, "run",
+        with mock.patch.object(headless, "_run_browser",
                                side_effect=subprocess.TimeoutExpired(cmd="x", timeout=1)):
             with self.assertRaises(RenderFailed) as caught:
                 headless.screenshot("a.html", "a.png", width=10, height=10, timeout=1,
@@ -331,11 +386,11 @@ class HeadlessTests(unittest.TestCase):
         所以拿到文件还要验 PNG 头与尺寸。"""
         folder = temp_dir(self)
 
-        def run(args, **kwargs):
+        def run(args, timeout):
             Path(args[-2].split("=", 1)[1]).write_bytes("这不是 PNG".encode())
             return subprocess.CompletedProcess(args, 0, b"", b"")
 
-        with mock.patch.object(headless.subprocess, "run", side_effect=run):
+        with mock.patch.object(headless, "_run_browser", side_effect=run):
             with self.assertRaises(RenderFailed) as caught:
                 headless.screenshot(folder / "a.html", folder / "a.png", width=10, height=10,
                                     browser=sys.executable)
@@ -611,7 +666,8 @@ class RealRenderTests(unittest.TestCase):
         self.assertGreater(payload["render"]["milliseconds"], 0)
         self.assertGreater(payload["render"]["bytes"], 1000)
         # 记录里必须说得出"用的哪个浏览器"，出问题时第一个要问的就是它。
-        self.assertEqual(Path(payload["render"]["browser_path"]), headless.find_browser())
+        self.assertIn(Path(payload["render"]["browser_path"]),
+                      [headless.find_browser(), *headless.browser_candidates()])
         path = service.paths.exports / payload["files"]["png"]
         self.assertEqual(headless.png_dimensions(path), (payload["layout"]["pixels"]["width"],
                                                         payload["layout"]["pixels"]["height"]))

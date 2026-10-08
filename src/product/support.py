@@ -13,6 +13,8 @@ import shutil
 import sqlite3
 import uuid
 import zipfile
+import re
+import stat
 
 from . import PRODUCT_VERSION
 from .database import MIGRATIONS, utc_now
@@ -76,10 +78,16 @@ class SupportService:
 
     @staticmethod
     def _safe_member(name):
-        value = PurePosixPath(name)
-        return (not value.is_absolute() and ".." not in value.parts and
-                value.parts and value.parts[0] in {*INCLUDED_DIRECTORIES,
-                                                    "workspace.sqlite3", "manifest.json"})
+        if not isinstance(name, str) or not name or any(c in name for c in '\\:\x00'):
+            return False
+        parts = name.split("/")
+        if any(not part or part in {".", ".."} or part.rstrip(" .") != part
+               or any(ord(c) < 32 or c in '<>"|?*' for c in part)
+               or re.match(r"(?i)^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", part)
+               for part in parts):
+            return False
+        return (name in {"workspace.sqlite3", "manifest.json"}
+                or len(parts) > 1 and parts[0] in INCLUDED_DIRECTORIES)
 
     def restore_backup(self, data: bytes):
         if not data or len(data) > MAX_BACKUP_BYTES:
@@ -93,21 +101,34 @@ class SupportService:
                     raise ValueError("备份展开后超过安全限制。")
                 file_names = [item.filename for item in infos if not item.is_dir()]
                 names = set(file_names)
-                if len(names) != len(file_names):
+                if len({name.casefold() for name in file_names}) != len(file_names):
                     raise ValueError("备份包含重复文件名。")
+                for item in infos:
+                    member = item.filename.rstrip("/") if item.is_dir() else item.filename
+                    if (not self._safe_member(member) and member not in INCLUDED_DIRECTORIES
+                            or stat.S_ISLNK(item.external_attr >> 16)):
+                        raise ValueError("备份包含非法路径或符号链接。")
                 if "manifest.json" not in names or not all(self._safe_member(name) for name in names):
                     raise ValueError("备份包含非法路径或缺少清单。")
                 manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-                if manifest.get("format") != BACKUP_FORMAT or not isinstance(manifest.get("files"), dict):
+                if (not isinstance(manifest, dict) or type(manifest.get("format")) is not int
+                        or manifest.get("format") != BACKUP_FORMAT
+                        or not isinstance(manifest.get("files"), dict)):
                     raise ValueError("备份格式版本不受支持。")
                 expected = set(manifest["files"])
                 if names != expected | {"manifest.json"} or "workspace.sqlite3" not in expected:
                     raise ValueError("备份成员与清单不一致。")
                 for name, metadata in manifest["files"].items():
+                    if (not isinstance(metadata, dict) or type(metadata.get("size")) is not int
+                            or metadata["size"] < 0 or not isinstance(metadata.get("sha256"), str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", metadata["sha256"])):
+                        raise ValueError("备份清单包含非法文件元数据。")
                     raw = archive.read(name)
                     if len(raw) != metadata.get("size") or sha256(raw).hexdigest() != metadata.get("sha256"):
                         raise ValueError(f"备份文件校验失败：{name}")
-                    target = stage.joinpath(*PurePosixPath(name).parts)
+                    target = stage.joinpath(*PurePosixPath(name).parts).resolve()
+                    if not target.is_relative_to(stage.resolve()):
+                        raise ValueError("备份路径越出恢复目录。")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(raw)
             candidate = stage / "workspace.sqlite3"
@@ -144,7 +165,8 @@ class SupportService:
                 raise
             finally:
                 shutil.rmtree(rollback, ignore_errors=True)
-        except (zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError,
+                sqlite3.DatabaseError, NotImplementedError, RuntimeError, OSError) as error:
             raise ValueError("不是有效的 Wenqu 备份。") from error
         finally:
             shutil.rmtree(stage, ignore_errors=True)

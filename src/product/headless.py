@@ -31,6 +31,8 @@ import struct
 import subprocess
 import tempfile
 import time
+import uuid
+import signal
 
 
 # 显式指定浏览器（便携版遇到"找不到浏览器"时，这是唯一的人工出口）。
@@ -137,7 +139,55 @@ def render_args(browser: Path, html_path: Path, png_path: Path, profile: Path,
     ]
 
 
+def _run_browser(args, timeout):
+    """超时只终止本次启动的进程树，不触碰用户的浏览器会话。"""
+    options = _creation_flags() if os.name == "nt" else {"start_new_session": True}
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **options) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                   capture_output=True, timeout=10, **_creation_flags())
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            finally:
+                process.kill()
+                process.communicate()
+            raise
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
 def screenshot(html_path, png_path, *, width: int, height: int, scale: int = 2,
+               timeout: int = DEFAULT_TIMEOUT, browser=None) -> dict:
+    """自动探测逐个尝试；显式指定的浏览器失败时直接报告。"""
+    override = browser or (os.environ.get(RENDERER_ENV) or "").strip().strip('"')
+    candidates = ([Path(override)] if override else
+                  list(dict.fromkeys(p for p in browser_candidates() if p.is_file())))
+    if not candidates or not candidates[0].is_file():
+        raise RendererUnavailable("没有找到可用的浏览器（Edge 或 Chrome）。")
+    failures = []
+    started = time.perf_counter()
+    for index, candidate in enumerate(candidates):
+        remaining = timeout - (time.perf_counter() - started)
+        if remaining <= 0:
+            break
+        try:
+            result = _screenshot_once(html_path, png_path, width=width, height=height,
+                                      scale=scale, timeout=remaining / (len(candidates) - index),
+                                      browser=candidate)
+            result["attempt_failures"] = failures
+            return result
+        except RenderFailed as error:
+            failures.append({"browser": browser_label(candidate), "message": str(error)})
+    raise RenderFailed("；".join(f'{item["browser"]}: {item["message"]}' for item in failures)
+                       or "渲染超时。")
+
+
+def _screenshot_once(html_path, png_path, *, width: int, height: int, scale: int = 2,
                timeout: int = DEFAULT_TIMEOUT, browser=None) -> dict:
     """把 `html_path` 渲染成 `png_path`，返回渲染记录。
 
@@ -154,15 +204,14 @@ def screenshot(html_path, png_path, *, width: int, height: int, scale: int = 2,
     png_path.parent.mkdir(parents=True, exist_ok=True)
     # 临时文件必须**继续以 .png 结尾**：无头 Chrome 按扩展名判断图片格式，给个
     # `.tmp` 会当场报 `Unsupported screenshot image file type: .tmp` 且不写文件。
-    staging = png_path.with_name(f".{png_path.stem}.staged.png")
+    staging = png_path.with_name(f".{png_path.stem}.{uuid.uuid4().hex}.staged.png")
     staging.unlink(missing_ok=True)
     profile = Path(tempfile.mkdtemp(prefix="obsidian-rag-render-"))
     args = render_args(Path(target), html_path, staging, profile, width, height, scale)
     started = time.perf_counter()
     try:
         try:
-            done = subprocess.run(args, capture_output=True, timeout=timeout,
-                                  **_creation_flags())
+            done = _run_browser(args, timeout)
         except subprocess.TimeoutExpired:
             raise RenderFailed(f"渲染超时：超过 {timeout} 秒仍未出图。") from None
         except OSError as error:

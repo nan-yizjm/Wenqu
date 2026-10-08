@@ -9,7 +9,8 @@
 //   2) node scripts/ui_acceptance.cjs [端口，默认 8765]
 //   3) 退出码 0 表示全部断言通过；截图落在 UI_SHOT_DIR（默认系统临时目录）
 //
-// 只读安全性：脚本不会点「连接」「删除会话」等会改数据的控件，只做浏览与取消。
+// 会上传合成资料、生成产出并删除本次测试记录，必须使用隔离验收数据。
+// 启动时检查 /setup 的数据根，只接受系统 TEMP 或项目 output/release 的子目录。
 // 需要环境变量 CHROME_PATH 时用它指向 chrome.exe，否则按常见安装位置探测。
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -104,6 +105,18 @@ const clickByText = (text, scope) => `(() => {
 })()`;
 
 (async () => {
+  const setup = await fetch(`${APP}api/v1/setup`).then(r => {
+    if (!r.ok) throw new Error(`setup HTTP ${r.status}`);
+    return r.json();
+  });
+  const dataRoot = path.resolve(setup.data_root || '');
+  const contained = base => {
+    const relative = path.relative(path.resolve(base), dataRoot);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  };
+  if (!contained(os.tmpdir()) && !contained(path.join(__dirname, '..', 'output', 'release'))) {
+    throw new Error('UI 验收会修改测试数据：请用 --data-root 指向 TEMP 或 output/release 下的独立目录。');
+  }
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cdp-accept-'));
   const chrome = spawn(CHROME, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',

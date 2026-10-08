@@ -30,3 +30,8 @@ dist-installer/
 # Agent workspace: project memory, daily logs, probe scripts and screenshot
 # evidence. Kept on disk, deliberately not tracked as source.
 .workbuddy/
+
+# Release verification scratch data
+output/release/
+
+.venv-experiments/

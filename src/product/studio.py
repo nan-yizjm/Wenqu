@@ -587,6 +587,7 @@ class StudioService:
             pixels = {"width": rendered["width"], "height": rendered["height"]}
             render = {"status": "complete", "reason": None, "message": None,
                       "browser": rendered["browser"], "browser_path": rendered["browser_path"],
+                      "attempt_failures": rendered.get("attempt_failures", []),
                       "milliseconds": rendered["milliseconds"], "bytes": rendered["bytes"],
                       "pixels": pixels,
                       # 理论尺寸由 `--window-size × scale` 决定（见 headless.py 实测），

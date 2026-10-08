@@ -8,7 +8,7 @@ a = Analysis(
     binaries=[],
     datas=[(str(root / "web" / "dist"), "web/dist"),
            (str(root / "docs" / "用户指南.md"), "resources/docs"),
-           (str(root / "docs" / "RELEASE_NOTES_0.2.2.md"), "resources/docs"),
+           (str(root / "docs" / "RELEASE_NOTES_0.2.3.md"), "resources/docs"),
            (str(root / "docs" / "THIRD_PARTY_LICENSES.md"), "resources/docs"),
            (str(root / "examples" / "欢迎使用.md"), "resources/examples")],
     hiddenimports=["keyring.backends.Windows", "uvicorn.logging", "uvicorn.loops.auto",
