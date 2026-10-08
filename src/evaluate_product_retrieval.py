@@ -29,8 +29,7 @@ holdout 12 题，但它们跑在 `src/serve.py` 那套编排上，量不到产�
 
 用法：
 
-    .\\.venv\\Scripts\\python.exe -X utf8 -m src.evaluate_product_retrieval ^
-        --vault "C:\\Users\\zjm\\Documents\\Obsidian Vault\\10_技术学习\\概念笔记\\大模型"
+    .\\.venv-product\\Scripts\\python.exe -X utf8 -m src.evaluate_product_retrieval --vault "<你的资料目录>"
 
 首次运行要建索引并编码（当前 56 篇 / 911 片段约需几十秒），索引落在被 Git 忽略的
 `data/generated/product_eval/`，之后重跑只走增量。全部离线：编码器与重排器都只读

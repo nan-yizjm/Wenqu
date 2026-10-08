@@ -24,9 +24,7 @@
 
 用法（先按 `docs/检索评测复现指南.md` 的方式把产品跑起来，或直接用下面的内嵌方式）：
 
-    .\\.venv\\Scripts\\python.exe -X utf8 -m src.evaluate_studio_backlinks ^
-        --vault "C:\\Users\\zjm\\Desktop\\file\\项目\\obsidian-rag\\docs" ^
-        --limit 4
+    .\\.venv-product\\Scripts\\python.exe -X utf8 -m src.evaluate_studio_backlinks --vault ".\\docs" --limit 4
 
 不带 `--topics` 时主题取语料里的文件名（去掉扩展名）。那量的是"整理某一篇笔记"，
 不是"综述某个概念"——文件名不等于主题，这个区别要在报告里写清楚。
