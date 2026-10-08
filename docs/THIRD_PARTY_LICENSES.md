@@ -39,8 +39,8 @@
 | pydantic | 2.13.5 | MIT | https://github.com/pydantic/pydantic |
 | pydantic_core | 2.46.5 | MIT | https://github.com/pydantic/pydantic |
 | Pygments | 2.21.0 | BSD-2-Clause | https://pygments.org |
-| pypdf | 6.18.1 | BSD-3-Clause | https://github.com/py-pdf/pypdf/issues |
-| python-multipart | 0.0.22 | Apache-2.0 | https://github.com/Kludex/python-multipart |
+| pypdf | 6.19.0 | BSD-3-Clause | https://github.com/py-pdf/pypdf/issues |
+| python-multipart | 0.0.31 | Apache-2.0 | https://github.com/Kludex/python-multipart |
 | pywin32-ctypes | 0.2.3 | BSD-3-Clause | https://github.com/enthought/pywin32-ctypes |
 | PyYAML | 6.0.3 | MIT | https://pyyaml.org/ |
 | regex | 2026.9.10 | Apache-2.0 AND CNRI-Python | https://github.com/mrabarnett/mrab-regex |
@@ -49,7 +49,7 @@
 | scikit-learn | 1.9.1 | BSD-3-Clause | https://scikit-learn.org |
 | scipy | 1.18.1 | BSD License | https://scipy.org/ |
 | sentence-transformers | 6.0.0 | Apache-2.0 | https://www.SBERT.net |
-| setuptools | 78.1.0 | MIT License | https://github.com/pypa/setuptools |
+| setuptools | 83.0.0 | MIT | https://github.com/pypa/setuptools |
 | shellingham | 1.5.4 | ISC License | https://github.com/sarugaku/shellingham |
 | starlette | 1.6.0 | BSD-3-Clause | https://github.com/Kludex/starlette |
 | sympy | 1.14.0 | BSD | https://sympy.org |
